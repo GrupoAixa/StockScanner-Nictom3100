@@ -1,0 +1,14 @@
+# Datos de negocio reales — nunca al repo público
+*.db
+_write_test.tmp
+
+# Python
+__pycache__/
+*.pyc
+build/
+
+# Credenciales locales (si alguna vez se usa un .env para la migración)
+.env
+
+# Archivos internos de Claude Code
+.claude/
