@@ -158,8 +158,13 @@ async function loadMovimientos() {
   if (!error) state.movimientos = data || [];
 }
 
+function normalizarCodigo(codigo) {
+  return (codigo || "").trim().toLowerCase();
+}
+
 function productoPorCodigo(codigo) {
-  return state.productos.find((p) => p.codigo === codigo);
+  const buscado = normalizarCodigo(codigo);
+  return state.productos.find((p) => normalizarCodigo(p.codigo) === buscado);
 }
 
 // ── Nav / tabs ───────────────────────────────────────────────
@@ -286,7 +291,7 @@ function showScanResult(frame, prod, codigo) {
   `;
 
   $("#btn-confirmar").addEventListener("click", () =>
-    confirmarMovimiento(prod, codigo, tipo, qty, nota, stockPrev, stockPost, frame)
+    confirmarMovimiento(prod, prod.codigo, tipo, qty, nota, stockPrev, stockPost, frame)
   );
   $("#btn-cancelar").addEventListener("click", () => {
     frame.innerHTML = '<div class="placeholder">Esperando escaneo...</div>';
@@ -626,6 +631,12 @@ async function guardarProducto() {
     alert("Código y Nombre son obligatorios.");
     return;
   }
+  const existente = productoPorCodigo(codigo);
+  if (existente && existente.id !== state.prodEditId) {
+    alert(`El código '${codigo}' ya existe como '${existente.codigo}' (${existente.nombre}).`);
+    return;
+  }
+
   const precio = parseFloat($("#prod-precio").value || "0");
   const stock = parseInt($("#prod-stock").value || "0", 10);
   const stockMin = parseInt($("#prod-stock-min").value || "5", 10);
