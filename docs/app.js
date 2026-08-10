@@ -371,6 +371,7 @@ function renderStock() {
       <input type="text" id="stock-search" />
       <div class="spacer"></div>
       <button class="btn-tool" id="stock-export">↑↓  Exportar CSV</button>
+      <button class="btn-tool" id="stock-export-pdf">⬇  Descargar PDF</button>
     </div>
     <table class="data-table">
       <thead>
@@ -385,6 +386,7 @@ function renderStock() {
   `;
   $("#stock-search").addEventListener("input", renderStockRows);
   $("#stock-export").addEventListener("click", exportCsv);
+  $("#stock-export-pdf").addEventListener("click", exportPdf);
   renderStockRows();
 }
 
@@ -447,6 +449,59 @@ function exportCsv() {
   a.download = `stock_${stamp}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function exportPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+  // Orden: categoría (para agrupar visualmente) y luego nombre alfabético.
+  const rows = [...state.productos].sort((a, b) => {
+    const catA = (a.categoria || "").toLowerCase();
+    const catB = (b.categoria || "").toLowerCase();
+    if (catA !== catB) return catA.localeCompare(catB);
+    return a.nombre.localeCompare(b.nombre);
+  });
+
+  const fecha = new Date().toLocaleString("es-AR");
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  doc.setFontSize(16);
+  doc.setTextColor(30, 30, 30);
+  doc.text("StockScanner — Inventario", 40, 40);
+  doc.setFontSize(9);
+  doc.setTextColor(110);
+  doc.text(`Generado: ${fecha}   ·   Total de productos: ${rows.length}`, 40, 56);
+
+  doc.autoTable({
+    startY: 70,
+    head: [["Código", "Producto", "Categoría", "Cantidad"]],
+    body: rows.map((p) => [p.codigo, p.nombre, p.categoria || "—", String(p.stock)]),
+    styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak", valign: "middle" },
+    headStyles: { fillColor: [249, 115, 22], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [245, 245, 245] },
+    columnStyles: {
+      0: { cellWidth: 85 },
+      1: { cellWidth: "auto" }, // nombre completo, con salto de línea si hace falta
+      2: { cellWidth: 100 },
+      3: { cellWidth: 60, halign: "center" },
+    },
+    margin: { left: 40, right: 40 },
+    tableWidth: pageWidth - 80,
+    didDrawPage: () => {
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text(
+        `Página ${doc.internal.getCurrentPageInfo().pageNumber} de ${pageCount}`,
+        pageWidth - 90,
+        doc.internal.pageSize.getHeight() - 20
+      );
+    },
+  });
+
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "").slice(0, 12);
+  doc.save(`inventario_${stamp}.pdf`);
 }
 
 // ── Modal: editar stock manual ───────────────────────────────
