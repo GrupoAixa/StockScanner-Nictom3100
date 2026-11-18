@@ -1432,6 +1432,20 @@ const MAIL_BADGE = {
 };
 const ESTADO_BADGE = { Pedido: "badge-blue", Recibido: "badge-green", Cancelado: "badge-gray" };
 
+// Entregas parciales: cantidad_recibida es ACUMULADA (suma de todas las entregas)
+const recibidoDe = (it) => Number(it.cantidad_recibida) || 0;
+const pendienteDe = (it) => Math.max(0, Number(it.cantidad) - recibidoDe(it));
+const fmtNum = (n) => String(Math.round(Number(n) * 100) / 100).replace(".", ",");
+
+function estadoPedidoHtml(p) {
+  const items = p.pedido_items || [];
+  const llegoAlgo = items.some((i) => recibidoDe(i) > 0);
+  const falta = items.some((i) => pendienteDe(i) > 0);
+  if (p.estado === "Pedido" && llegoAlgo) return `<span class="badge badge-yellow" title="Llegó una parte, falta el resto">Parcial</span>`;
+  if (p.estado === "Recibido" && falta) return `<span class="badge badge-green" title="Se cerró con mercadería faltante">Recibido</span><br><span class="muted" style="color:var(--yellow)">con faltante</span>`;
+  return `<span class="badge ${ESTADO_BADGE[p.estado]}">${p.estado}</span>`;
+}
+
 function renderPedidoRows() {
   const q = ($("#ped-search")?.value || "").trim().toLowerCase();
   const f = state.pedFiltro;
@@ -1458,7 +1472,13 @@ function renderPedidoRows() {
           (i) =>
             `<div class="ped-li"><b>${escapeHtml(String(i.cantidad))} ${escapeHtml(i.unidad)}</b> · ${escapeHtml(i.descripcion)}` +
             `${[i.marca, i.color, i.medida].filter(Boolean).length ? ` <span class="muted">(${escapeHtml([i.marca, i.color, i.medida].filter(Boolean).join(" · "))})</span>` : ""}` +
-            `${i.cantidad_recibida != null ? ` <span class="muted">→ recibido ${escapeHtml(String(i.cantidad_recibida))}</span>` : ""}</div>`
+            `${
+              recibidoDe(i) > 0
+                ? pendienteDe(i) > 0
+                  ? ` <span class="muted" style="color:var(--yellow)">→ llegó ${fmtNum(recibidoDe(i))}, falta ${fmtNum(pendienteDe(i))}</span>`
+                  : ` <span class="muted" style="color:var(--green)">→ llegó ${fmtNum(recibidoDe(i))} ✓</span>`
+                : ""
+            }</div>`
         )
         .join("");
       return `
@@ -1469,10 +1489,11 @@ function renderPedidoRows() {
           <td>${escapeHtml(p.categoria || "—")}</td>
           <td>${escapeHtml(p.proveedor || "—")}</td>
           <td>${escapeHtml(p.usuario || "—")}</td>
-          <td class="center"><span class="badge ${ESTADO_BADGE[p.estado]}">${p.estado}</span>${p.fecha_recibido ? `<br><span class="muted">${new Date(p.fecha_recibido).toLocaleDateString("es-AR")}</span>` : ""}</td>
+          <td class="center">${estadoPedidoHtml(p)}${p.fecha_recibido ? `<br><span class="muted">${new Date(p.fecha_recibido).toLocaleDateString("es-AR")}</span>` : ""}</td>
           <td class="center"><span class="badge ${mCls}" title="${escapeHtml(p.email_detalle || mTit)}">${mIcon}</span></td>
           <td class="actions center">
-            ${p.estado === "Pedido" ? `<button class="icon-btn" data-act="recibir" data-id="${p.id}" title="Registrar que llegó (suma al stock)">📦 Recibir</button>` : ""}
+            ${p.estado === "Pedido" ? `<button class="icon-btn" data-act="recibir" data-id="${p.id}" title="Registrar lo que llegó (suma al stock). Se puede hacer en varias entregas.">📦 Recibir</button>` : ""}
+            ${p.estado !== "Pedido" ? `<button class="icon-btn" data-act="reabrir" data-id="${p.id}" title="Reabrir el pedido (ej: el proveedor trae el resto otro día)">↺ Reabrir</button>` : ""}
             <button class="icon-btn" data-act="pdf" data-id="${p.id}" title="Descargar orden en PDF">⬇ PDF</button>
             ${p.estado === "Pedido" ? `<button class="icon-btn" data-act="mail" data-id="${p.id}" title="Volver a enviar el mail">✉</button>` : ""}
             ${p.estado === "Pedido" ? `<button class="icon-btn danger" data-act="cancelar" data-id="${p.id}" title="Cancelar pedido">✕</button>` : ""}
@@ -1488,6 +1509,7 @@ function renderPedidoRows() {
       if (b.dataset.act === "pdf") pdfPedido(id);
       if (b.dataset.act === "mail") enviarMailPedido(id);
       if (b.dataset.act === "cancelar") cancelarPedido(id);
+      if (b.dataset.act === "reabrir") reabrirPedido(id);
     })
   );
 }
@@ -1502,7 +1524,29 @@ async function cancelarPedido(id) {
   renderCurrentTab();
 }
 
-// ── Recepción: marca el pedido como recibido y suma al stock ─
+async function reabrirPedido(id) {
+  const ped = state.pedidos.find((p) => p.id === id);
+  if (!ped) return;
+  const faltan = (ped.pedido_items || []).filter((i) => pendienteDe(i) > 0);
+  if (
+    !confirm(
+      `¿Reabrir el pedido #${id}?\n\n` +
+        (faltan.length
+          ? `Queda pendiente:\n${faltan.map((i) => `· ${fmtNum(pendienteDe(i))} ${i.unidad} de ${i.descripcion}`).join("\n")}\n\n`
+          : "") +
+        `Lo que ya se recibió queda registrado (no se vuelve a sumar al stock).`
+    )
+  )
+    return;
+  const { error } = await sb.from("pedidos").update({ estado: "Pedido", fecha_recibido: null }).eq("id", id);
+  if (error) return alert(`No se pudo reabrir.\n\nDetalle: ${error.message}`);
+  toast(`↺ Pedido #${id} reabierto`);
+  await loadPedidos();
+  refreshAlertBadge();
+  renderCurrentTab();
+}
+
+// ── Recepción: puede ser en varias entregas (parciales) ──────
 let recibirId = null;
 
 function abrirRecibir(id) {
@@ -1513,11 +1557,15 @@ function abrirRecibir(id) {
   $("#recibir-items").innerHTML = (ped.pedido_items || [])
     .map((it) => {
       const prod = it.codigo ? productoPorCodigo(it.codigo) : null;
+      const ya = recibidoDe(it);
+      const falta = pendienteDe(it);
       return `
-        <div class="recibir-row" data-item="${it.id}">
+        <div class="recibir-row ${falta === 0 ? "rr-completo" : ""}" data-item="${it.id}">
           <div class="rr-desc">${escapeHtml(it.descripcion)}<br>
-            <span class="muted">Pedido: ${escapeHtml(String(it.cantidad))} ${escapeHtml(it.unidad)}${prod ? ` · stock actual ${prod.stock}` : " · insumo nuevo"}</span></div>
-          <label>Llegó<input type="number" class="rr-cant" min="0" step="any" value="${escapeHtml(String(it.cantidad))}" /></label>
+            <span class="muted">Pedido: ${fmtNum(it.cantidad)} ${escapeHtml(it.unidad)}` +
+        (ya > 0 ? ` · ya llegó ${fmtNum(ya)} · <b style="color:${falta ? "var(--yellow)" : "var(--green)"}">${falta ? `falta ${fmtNum(falta)}` : "completo ✓"}</b>` : "") +
+        `${prod ? ` · stock actual ${prod.stock}` : " · insumo nuevo"}</span></div>
+          <label>Llega ahora<input type="number" class="rr-cant" min="0" step="any" value="${fmtNum(falta).replace(",", ".")}" /></label>
           ${
             prod
               ? `<label class="rr-check"><input type="checkbox" class="rr-sumar" checked /> Sumar al stock</label>`
@@ -1526,8 +1574,10 @@ function abrirRecibir(id) {
         </div>`;
     })
     .join("");
+  $("#recibir-cerrar").checked = false;
   $("#recibir-confirm").disabled = false;
   $("#recibir-modal").classList.remove("hidden");
+  $(".recibir-row:not(.rr-completo) .rr-cant")?.select();
 }
 
 $("#recibir-cancel").addEventListener("click", () => $("#recibir-modal").classList.add("hidden"));
@@ -1535,14 +1585,26 @@ $("#recibir-cancel").addEventListener("click", () => $("#recibir-modal").classLi
 $("#recibir-confirm").addEventListener("click", async () => {
   const ped = state.pedidos.find((p) => p.id === recibirId);
   if (!ped) return;
+  const filas = $all(".recibir-row", $("#recibir-items")).map((row) => ({
+    row,
+    it: ped.pedido_items.find((x) => String(x.id) === row.dataset.item),
+    cant: Math.max(0, parseFloat(String($(".rr-cant", row).value).replace(",", ".")) || 0),
+  }));
+  const cerrarIgual = $("#recibir-cerrar").checked;
+  if (!filas.some((f) => f.cant > 0) && !cerrarIgual) {
+    return alert("No cargaste ninguna cantidad.\n\nSi el proveedor no va a traer nada más, tildá \"Cerrar el pedido aunque falte mercadería\".");
+  }
+
   const btn = $("#recibir-confirm");
   btn.disabled = true;
   const errores = [];
+  const recibidoNuevo = {}; // item.id -> acumulado después de esta entrega
 
-  for (const row of $all(".recibir-row", $("#recibir-items"))) {
-    const it = ped.pedido_items.find((x) => String(x.id) === row.dataset.item);
-    const cant = parseFloat(String($(".rr-cant", row).value).replace(",", ".")) || 0;
-    await sb.from("pedido_items").update({ cantidad_recibida: cant }).eq("id", it.id);
+  for (const { row, it, cant } of filas) {
+    recibidoNuevo[it.id] = recibidoDe(it) + cant;
+    if (cant <= 0) continue;
+    const { error: eIt } = await sb.from("pedido_items").update({ cantidad_recibida: recibidoNuevo[it.id] }).eq("id", it.id);
+    if (eIt) { errores.push(`${it.descripcion}: ${eIt.message}`); continue; }
 
     const sumar = $(".rr-sumar", row)?.checked;
     if (!sumar || cant <= 0 || !it.codigo) continue;
@@ -1562,22 +1624,33 @@ $("#recibir-confirm").addEventListener("click", async () => {
       cantidad: qty,
       stock_prev: prod.stock,
       stock_post: stockPost,
-      nota: `Recepción pedido #${ped.id}${ped.proveedor ? ` (${ped.proveedor})` : ""}`,
+      nota:
+        `Recepción pedido #${ped.id}${ped.proveedor ? ` (${ped.proveedor})` : ""}` +
+        (recibidoNuevo[it.id] < Number(it.cantidad) ? ` — parcial ${fmtNum(recibidoNuevo[it.id])} de ${fmtNum(it.cantidad)}` : ""),
       usuario: state.currentUserLabel,
       fecha: nowStamp(),
     });
   }
 
-  const { error } = await sb
-    .from("pedidos")
-    .update({ estado: "Recibido", fecha_recibido: new Date().toISOString(), recibido_por: state.currentUserLabel })
-    .eq("id", ped.id);
+  const faltantes = filas.filter(({ it }) => recibidoNuevo[it.id] < Number(it.cantidad));
+  const completo = faltantes.length === 0;
+  let error = null;
+  if (completo || cerrarIgual) {
+    ({ error } = await sb
+      .from("pedidos")
+      .update({ estado: "Recibido", fecha_recibido: new Date().toISOString(), recibido_por: state.currentUserLabel })
+      .eq("id", ped.id));
+  }
 
   $("#recibir-modal").classList.add("hidden");
   if (error || errores.length) {
     alert(`La recepción se registró con problemas:\n\n${[error?.message, ...errores].filter(Boolean).join("\n")}`);
+  } else if (completo) {
+    toast(`✓ Pedido #${ped.id} recibido completo y stock actualizado`);
+  } else if (cerrarIgual) {
+    toast(`Pedido #${ped.id} cerrado con faltante (${faltantes.length} ítem${faltantes.length > 1 ? "s" : ""})`);
   } else {
-    toast(`✓ Pedido #${ped.id} recibido y stock actualizado`);
+    toast(`📦 Entrega parcial registrada. El pedido #${ped.id} sigue abierto: falta${faltantes.length > 1 ? "n" : ""} ${faltantes.length} ítem${faltantes.length > 1 ? "s" : ""}`);
   }
   await loadProductos();
   await loadMovimientos();
@@ -1593,6 +1666,7 @@ function pdfPedido(id) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
   const w = doc.internal.pageSize.getWidth();
+  const hayRecibido = (ped.pedido_items || []).some((i) => recibidoDe(i) > 0);
 
   doc.setFontSize(18);
   doc.setTextColor(234, 88, 12);
@@ -1604,14 +1678,15 @@ function pdfPedido(id) {
 
   doc.autoTable({
     startY: 96,
-    head: [["Insumo", "Código", "Marca", "Color", "Medida", "Cantidad"]],
+    head: [["Insumo", "Código", "Marca", "Color", "Medida", "Cantidad", ...(hayRecibido ? ["Recibido"] : [])]],
     body: (ped.pedido_items || []).map((i) => [
       i.descripcion,
       i.codigo || "nuevo",
       i.marca || "—",
       i.color || "—",
       i.medida || "—",
-      `${i.cantidad} ${i.unidad}`,
+      `${fmtNum(i.cantidad)} ${i.unidad}`,
+      ...(hayRecibido ? [pendienteDe(i) > 0 ? `${fmtNum(recibidoDe(i))} (falta ${fmtNum(pendienteDe(i))})` : `${fmtNum(recibidoDe(i))} (completo)`] : []),
     ]),
     styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
     headStyles: { fillColor: [249, 115, 22], textColor: 255, fontStyle: "bold" },

@@ -363,3 +363,6 @@ tr.tipo-ajuste td.tipo-cell { color: var(--yellow); }
   .recibir-row { grid-template-columns: 1fr; }
 }
 .modal-card .hint { color: var(--fg2); font-size: 11px; margin: 8px 0; }
+.badge-yellow { background: rgba(234,179,8,.18); color: #FDE047; }
+.recibir-row.rr-completo { opacity: .55; }
+.rr-cerrar { margin-top: 14px !important; color: var(--fg) !important; font-size: 12px !important; }

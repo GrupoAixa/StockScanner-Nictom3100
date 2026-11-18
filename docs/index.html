@@ -140,8 +140,10 @@
   <div id="recibir-modal" class="modal hidden">
     <div class="modal-card modal-wide">
       <h2 id="recibir-title">📦 Recibir pedido</h2>
-      <p class="hint">Cargá lo que llegó. Los insumos que están en el stock se suman automáticamente como ENTRADA.</p>
+      <p class="hint">Cargá lo que llega ahora (viene precargado lo que falta). Los insumos que están en el stock se suman automáticamente como ENTRADA.</p>
       <div id="recibir-items"></div>
+      <label class="rr-check rr-cerrar"><input type="checkbox" id="recibir-cerrar" /> Cerrar el pedido aunque falte mercadería (el proveedor no va a traer el resto)</label>
+      <p class="hint">Si no tildás esto y falta algo, el pedido queda abierto como <b>Parcial</b> y podés volver a tocar 📦 Recibir cuando llegue el resto.</p>
       <div class="modal-actions">
         <button id="recibir-confirm" class="btn-accent">✓  Confirmar recepción</button>
         <button id="recibir-cancel" class="btn-secondary">Cancelar</button>
