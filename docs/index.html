@@ -66,7 +66,11 @@
         </button>
         <button class="nav-btn" data-tab="pedidos" id="nav-pedidos">
           <span class="nav-main">🛒  Pedidos</span>
-          <span class="nav-sub">Órdenes de compra</span>
+          <span class="nav-sub">Pendientes de pedir / recibir</span>
+        </button>
+        <button class="nav-btn" data-tab="recibidos" id="nav-recibidos">
+          <span class="nav-main">📦  Recibidos</span>
+          <span class="nav-sub">Pedidos que ya llegaron</span>
         </button>
       </nav>
 
@@ -128,7 +132,7 @@
       <label class="ped-obs-label">Observaciones
         <textarea id="ped-obs" rows="2" placeholder="Ej: entregar en planta, consultar precio…"></textarea>
       </label>
-      <p class="hint">✉ Al confirmar se envía por mail a sergio@grupoaixa.com.ar y leo@grupoaixa.com.ar</p>
+      <p class="hint" id="ped-mail-hint">✉ Al confirmar se envía por mail a sergio@grupoaixa.com.ar y leo@grupoaixa.com.ar</p>
       <div class="modal-actions">
         <button id="ped-confirm" class="btn-accent">✉  Confirmar y enviar pedido</button>
         <button id="ped-cancel" class="btn-secondary">Cancelar</button>

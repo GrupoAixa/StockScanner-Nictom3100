@@ -116,3 +116,14 @@ correo de la PC con el pedido ya escrito para Sergio y Leo (no se pierde ningún
 
 Los destinatarios (sergio@grupoaixa.com.ar y leo@grupoaixa.com.ar) están fijos dentro de la
 función. Para cambiarlos, editá `DESTINATARIOS` en ese archivo y en `docs/app.js`.
+
+## 12. Pedidos v2: estado "Pendiente", apartado Recibidos, borrar y editar
+
+**SQL Editor → New query** → pegá `supabase/pedidos_v2.sql` → **Run**. No borra datos.
+
+- Estados: **Pendiente** (cargado, falta pedírselo al proveedor) → **Pedido** (botón "✓ Marcar pedido")
+  → **Recibido** (pasa solo al apartado 📦 Recibidos). Los pedidos que ya existían conservan su estado.
+- **Borrar** pedidos: solo Admin y Sergio.
+- **Editar**: todos, pero nadie puede cambiar la fecha, y Leo solo puede editar los que están "Pendiente".
+  Estas reglas están en la base (no solo en la web).
+- La función de mail no cambia: no hace falta volver a publicarla.

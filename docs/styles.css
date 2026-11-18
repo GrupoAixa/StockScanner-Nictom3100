@@ -366,3 +366,6 @@ tr.tipo-ajuste td.tipo-cell { color: var(--yellow); }
 .badge-yellow { background: rgba(234,179,8,.18); color: #FDE047; }
 .recibir-row.rr-completo { opacity: .55; }
 .rr-cerrar { margin-top: 14px !important; color: var(--fg) !important; font-size: 12px !important; }
+.badge-orange { background: rgba(249,115,22,.18); color: var(--accent2); }
+.icon-btn.btn-marcar { color: var(--accent2); font-weight: bold; }
+.icon-btn.btn-marcar:hover { color: var(--green); }

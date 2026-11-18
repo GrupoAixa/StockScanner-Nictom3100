@@ -23,7 +23,9 @@ const state = {
   pedidos: [],            // pedidos con sus pedido_items
   hasPedidos: false,      // existe la tabla pedidos (se corrió supabase/pedidos.sql)
   hasProdExtras: false,   // existen las columnas marca/color/... en productos
-  pedFiltro: "abiertos",
+  pedFiltro: "abiertos",   // pestaña Pedidos: abiertos | Pendiente | Pedido
+  archFiltro: "Recibido",  // pestaña Recibidos: Recibido | Cancelado | todos
+  hasPedidosV2: false,     // se corrió supabase/pedidos_v2.sql (estado Pendiente, borrar)
 };
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -112,6 +114,7 @@ let realtimeChannel = null;
 
 async function onLoggedIn(session) {
   state.currentUserLabel = EMAIL_TO_NAME[session.user.email] || session.user.email;
+  state.currentEmail = session.user.email;
   $("#login-view").classList.add("hidden");
   $("#app-view").classList.remove("hidden");
   $("#logged-in-as").textContent = `Conectado: ${state.currentUserLabel}`;
@@ -220,6 +223,7 @@ function renderCurrentTab() {
     productos: renderProductos,
     alertas: renderAlertas,
     pedidos: renderPedidos,
+    recibidos: renderRecibidos,
   };
   renderers[state.currentTab]?.();
 }
@@ -228,7 +232,7 @@ function refreshAlertBadge() {
   const count = state.productos.filter((p) => p.stock <= p.stock_min).length;
   const label = $("#nav-alertas .nav-main");
   label.textContent = count > 0 ? `⚠  Alertas  (${count})` : "⚠  Alertas";
-  const abiertos = state.pedidos.filter((p) => p.estado === "Pedido").length;
+  const abiertos = state.pedidos.filter(esAbierto).length;
   $("#nav-pedidos .nav-main").textContent = abiertos > 0 ? `🛒  Pedidos  (${abiertos})` : "🛒  Pedidos";
   renderAlertPopup();
 }
@@ -959,12 +963,15 @@ function inferirDatos(nombre) {
 }
 
 async function detectSchema() {
-  const [a, b] = await Promise.all([
+  const [a, b, c] = await Promise.all([
     sb.from("pedidos").select("id").limit(1),
     sb.from("productos").select("marca,cant_reposicion").limit(1),
+    sb.from("pedidos").select("pedido_por").limit(1),
   ]);
   state.hasPedidos = !a.error;
   state.hasProdExtras = !b.error;
+  state.hasPedidosV2 = !c.error;
+  if (state.hasPedidos && !state.hasPedidosV2) console.warn("[pedidos] Falta ejecutar supabase/pedidos_v2.sql");
   if (!state.hasPedidos) console.warn("[pedidos] Falta ejecutar supabase/pedidos.sql:", a.error?.message);
 }
 
@@ -972,8 +979,8 @@ async function loadPedidos() {
   if (!state.hasPedidos) return;
   // todos los abiertos (para no perder alertas) + los últimos 300 cerrados
   const [abiertos, cerrados] = await Promise.all([
-    sb.from("pedidos").select("*, pedido_items(*)").eq("estado", "Pedido").order("id", { ascending: false }),
-    sb.from("pedidos").select("*, pedido_items(*)").neq("estado", "Pedido").order("id", { ascending: false }).limit(300),
+    sb.from("pedidos").select("*, pedido_items(*)").in("estado", ESTADOS_ABIERTOS).order("id", { ascending: false }),
+    sb.from("pedidos").select("*, pedido_items(*)").in("estado", ["Recibido", "Cancelado"]).order("id", { ascending: false }).limit(300),
   ]);
   if (abiertos.error || cerrados.error) return;
   state.pedidos = [...abiertos.data, ...cerrados.data].sort((a, b) => b.id - a.id);
@@ -992,10 +999,21 @@ function fillDatalists() {
   $("#ped-prov-list").innerHTML = [...provs].map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
 }
 
-function pedidoAbiertoDe(codigo) {
+// Pendiente (falta pedirlo al proveedor) y Pedido (esperando entrega) son pedidos "abiertos"
+const ESTADOS_ABIERTOS = ["Pendiente", "Pedido"];
+const esAbierto = (p) => ESTADOS_ABIERTOS.includes(p.estado);
+
+// ── Permisos ──
+// Admin y Sergio: borran pedidos y editan cualquiera. Leo: edita solo los "Pendiente".
+// (las mismas reglas están en la base: supabase/pedidos_v2.sql)
+const esLeo = () => state.currentEmail === USERS.leo.email;
+const puedeBorrar = () => [USERS.admin.email, USERS.sergio.email].includes(state.currentEmail);
+const puedeEditar = (p) => !(esLeo() && p.estado !== "Pendiente");
+
+function pedidoAbiertoDe(codigo, exceptoId = null) {
   const c = normalizarCodigo(codigo);
   return state.pedidos.find(
-    (p) => p.estado === "Pedido" && (p.pedido_items || []).some((it) => normalizarCodigo(it.codigo) === c)
+    (p) => esAbierto(p) && p.id !== exceptoId && (p.pedido_items || []).some((it) => normalizarCodigo(it.codigo) === c)
   );
 }
 
@@ -1124,6 +1142,9 @@ $("#alert-popup-title").addEventListener("click", () => {
 
 // ── Modal: orden de pedido ───────────────────────────────────
 let pedidoOrigen = "manual";
+let pedidoEditando = null; // pedido que se está editando (null = pedido nuevo)
+const TXT_CONFIRMAR = "✉  Confirmar y enviar pedido";
+const TXT_GUARDAR = "💾  Guardar cambios";
 
 function abrirPedidoDesdeAlerta(codigos) {
   const prods = codigos.map(productoPorCodigo).filter(Boolean);
@@ -1144,6 +1165,7 @@ function abrirPedidoModal({ origen, items, proveedor = "", categoria = "" }) {
     return;
   }
   pedidoOrigen = origen;
+  pedidoEditando = null;
   $("#pedido-modal-title").textContent =
     origen === "alerta" ? "🛒 Orden de pedido — reposición por stock mínimo" : "🛒 Nuevo pedido manual";
   $("#ped-categoria").value = categoria;
@@ -1152,6 +1174,8 @@ function abrirPedidoModal({ origen, items, proveedor = "", categoria = "" }) {
   $("#ped-obs").value = "";
   $("#ped-items").innerHTML = "";
   items.forEach(agregarFilaItem);
+  $("#ped-mail-hint").classList.remove("hidden");
+  $("#ped-confirm").textContent = TXT_CONFIRMAR;
   $("#ped-confirm").disabled = false;
   $("#pedido-modal").classList.remove("hidden");
   // foco en la cantidad del primer ítem (lo único que casi siempre hay que tocar)
@@ -1160,11 +1184,37 @@ function abrirPedidoModal({ origen, items, proveedor = "", categoria = "" }) {
   first?.select?.();
 }
 
+function abrirEditarPedido(id) {
+  const ped = state.pedidos.find((p) => p.id === id);
+  if (!ped) return;
+  if (!puedeEditar(ped)) {
+    return alert(`El pedido #${id} ya figura como "${ped.estado}".\n\nSolo Admin o Sergio pueden editarlo.`);
+  }
+  pedidoEditando = ped;
+  pedidoOrigen = ped.origen;
+  $("#pedido-modal-title").textContent =
+    `✎ Editar pedido #${ped.id} — creado el ${new Date(ped.fecha).toLocaleDateString("es-AR")} por ${ped.usuario} (la fecha no se modifica)`;
+  $("#ped-categoria").value = ped.categoria || "";
+  $("#ped-proveedor").value = ped.proveedor || "";
+  $("#ped-urgencia").value = ped.urgencia || "Normal";
+  $("#ped-obs").value = ped.obs || "";
+  $("#ped-items").innerHTML = "";
+  (ped.pedido_items || []).forEach(agregarFilaItem);
+  if (!(ped.pedido_items || []).length) agregarFilaItem({});
+  $("#ped-mail-hint").classList.add("hidden");
+  $("#ped-confirm").textContent = TXT_GUARDAR;
+  $("#ped-confirm").disabled = false;
+  $("#pedido-modal").classList.remove("hidden");
+  $("#ped-items .pi-desc")?.focus();
+}
+
 function agregarFilaItem(it = {}) {
   const row = document.createElement("div");
   row.className = "ped-item-row";
   row.dataset.codigo = it.codigo || "";
   row.dataset.stock = it.stock_al_pedir ?? "";
+  row.dataset.itemId = it.id || "";            // ítem ya guardado (al editar)
+  row.dataset.recibido = recibidoDe(it) || ""; // lo que ya llegó de este ítem
   row.innerHTML = `
     <div class="pi-desc-wrap">
       <input class="pi-desc" list="prod-datalist" placeholder="Buscar en stock o escribir insumo nuevo" value="${escapeHtml(it.descripcion || "")}" />
@@ -1214,6 +1264,8 @@ function agregarFilaItem(it = {}) {
     actualizarTagFila(row);
   });
   $(".pi-del", row).addEventListener("click", () => {
+    if (Number(row.dataset.recibido) > 0 &&
+        !confirm(`De "${$(".pi-desc", row).value}" ya se recibieron ${fmtNum(row.dataset.recibido)}.\n\n¿Quitarlo igual del pedido? (el stock que ya se sumó no cambia)`)) return;
     row.remove();
     if (!$("#ped-items").children.length) agregarFilaItem({});
   });
@@ -1238,11 +1290,15 @@ $("#ped-add-item").addEventListener("click", () => {
   agregarFilaItem({});
   $("#ped-items .ped-item-row:last-child .pi-desc").focus();
 });
-$("#ped-cancel").addEventListener("click", () => $("#pedido-modal").classList.add("hidden"));
+$("#ped-cancel").addEventListener("click", () => {
+  $("#pedido-modal").classList.add("hidden");
+  pedidoEditando = null;
+});
 
 $("#ped-confirm").addEventListener("click", async () => {
   const items = $all(".ped-item-row", $("#ped-items"))
     .map((row) => ({
+      _id: row.dataset.itemId ? Number(row.dataset.itemId) : null,
       codigo: row.dataset.codigo || "",
       descripcion: $(".pi-desc", row).value.trim().replace(/\s*\[[^\]]+\]\s*$/, ""),
       marca: $(".pi-marca", row).value.trim(),
@@ -1257,6 +1313,8 @@ $("#ped-confirm").addEventListener("click", async () => {
   if (!items.length) return alert("Agregá al menos un insumo.");
   const malCant = items.find((i) => !(i.cantidad > 0));
   if (malCant) return alert(`Revisá la cantidad de "${malCant.descripcion}".`);
+
+  if (pedidoEditando) return guardarEdicionPedido(items);
 
   const yaPedidos = items.map((i) => i.codigo && pedidoAbiertoDe(i.codigo)).filter(Boolean);
   if (
@@ -1273,7 +1331,8 @@ $("#ped-confirm").addEventListener("click", async () => {
     .from("pedidos")
     .insert({
       origen: pedidoOrigen,
-      estado: "Pedido",
+      // sin la migración v2 la base solo acepta "Pedido"
+      estado: state.hasPedidosV2 ? "Pendiente" : "Pedido",
       categoria: $("#ped-categoria").value.trim(),
       proveedor: $("#ped-proveedor").value.trim(),
       urgencia: $("#ped-urgencia").value,
@@ -1285,21 +1344,21 @@ $("#ped-confirm").addEventListener("click", async () => {
 
   if (error) {
     btn.disabled = false;
-    btn.textContent = "✉  Confirmar y enviar pedido";
+    btn.textContent = TXT_CONFIRMAR;
     return alert(`No se pudo guardar el pedido.\n\nDetalle: ${error.message}`);
   }
 
-  const { error: itErr } = await sb.from("pedido_items").insert(items.map((i) => ({ ...i, pedido_id: ped.id })));
+  const { error: itErr } = await sb.from("pedido_items").insert(items.map(({ _id, ...i }) => ({ ...i, pedido_id: ped.id })));
   if (itErr) {
     // sin ítems el pedido no sirve: se marca cancelado para que no quede "abierto" vacío
     await sb.from("pedidos").update({ estado: "Cancelado", obs: `Error al guardar ítems: ${itErr.message}` }).eq("id", ped.id);
     btn.disabled = false;
-    btn.textContent = "✉  Confirmar y enviar pedido";
+    btn.textContent = TXT_CONFIRMAR;
     return alert(`No se pudieron guardar los ítems del pedido.\n\nDetalle: ${itErr.message}`);
   }
 
   $("#pedido-modal").classList.add("hidden");
-  btn.textContent = "✉  Confirmar y enviar pedido";
+  btn.textContent = TXT_CONFIRMAR;
   toast(`✓ Pedido #${ped.id} registrado. Enviando mail…`);
 
   await loadPedidos();
@@ -1308,6 +1367,98 @@ $("#ped-confirm").addEventListener("click", async () => {
 
   await enviarMailPedido(ped.id);
 });
+
+async function guardarEdicionPedido(items) {
+  const ped = pedidoEditando;
+  const btn = $("#ped-confirm");
+  btn.disabled = true;
+  btn.textContent = "Guardando…";
+  const errores = [];
+
+  const header = {
+    categoria: $("#ped-categoria").value.trim(),
+    proveedor: $("#ped-proveedor").value.trim(),
+    urgencia: $("#ped-urgencia").value,
+    obs: $("#ped-obs").value.trim(),
+  };
+  if (state.hasPedidosV2) Object.assign(header, { editado_por: state.currentUserLabel, fecha_editado: new Date().toISOString() });
+  const { error: eH } = await sb.from("pedidos").update(header).eq("id", ped.id);
+  if (eH) errores.push(eH.message);
+
+  if (!eH) {
+    const idsQuedan = new Set(items.filter((i) => i._id).map((i) => i._id));
+    for (const viejo of ped.pedido_items || []) {
+      if (idsQuedan.has(viejo.id)) continue;
+      const { error } = await sb.from("pedido_items").delete().eq("id", viejo.id);
+      if (error) errores.push(`Quitar "${viejo.descripcion}": ${error.message}`);
+    }
+    for (const { _id, ...it } of items) {
+      if (_id) {
+        const { stock_al_pedir, ...cambios } = it; // el stock al momento de pedir no se pisa
+        const { error } = await sb.from("pedido_items").update(cambios).eq("id", _id);
+        if (error) errores.push(`"${it.descripcion}": ${error.message}`);
+      } else {
+        const { error } = await sb.from("pedido_items").insert({ ...it, pedido_id: ped.id });
+        if (error) errores.push(`Agregar "${it.descripcion}": ${error.message}`);
+      }
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = TXT_GUARDAR;
+  await loadPedidos();
+  refreshAlertBadge();
+  renderCurrentTab();
+  if (errores.length) return alert(`No se pudieron guardar todos los cambios:\n\n${errores.join("\n")}`);
+
+  $("#pedido-modal").classList.add("hidden");
+  pedidoEditando = null;
+  toast(`✓ Pedido #${ped.id} actualizado`);
+  if (esAbierto(ped) && confirm(`¿Reenviar el mail del pedido #${ped.id} corregido a Sergio y Leo?`)) {
+    await enviarMailPedido(ped.id);
+  }
+}
+
+// ── Marcar como pedido al proveedor / borrar ─────────────────
+async function marcarPedido(id) {
+  const ped = state.pedidos.find((p) => p.id === id);
+  if (!ped) return;
+  if (!confirm(`¿Confirmás que el pedido #${id} ya se le pidió al proveedor${ped.proveedor ? ` (${ped.proveedor})` : ""}?`)) return;
+  const { error } = await sb
+    .from("pedidos")
+    .update({ estado: "Pedido", fecha_pedido_prov: new Date().toISOString(), pedido_por: state.currentUserLabel })
+    .eq("id", id);
+  if (error) return alert(`No se pudo actualizar.\n\nDetalle: ${error.message}`);
+  toast(`✓ Pedido #${id} marcado como pedido al proveedor`);
+  await loadPedidos();
+  refreshAlertBadge();
+  renderCurrentTab();
+}
+
+async function borrarPedido(id) {
+  if (!puedeBorrar()) return alert("Solo Admin y Sergio pueden borrar pedidos.");
+  const ped = state.pedidos.find((p) => p.id === id);
+  if (!ped) return;
+  const llego = (ped.pedido_items || []).some((i) => recibidoDe(i) > 0);
+  if (
+    !confirm(
+      `¿BORRAR definitivamente el pedido #${id}?\n\n` +
+        `Se elimina con todos sus ítems y no se puede deshacer.` +
+        (llego ? `\n\nOjo: el stock que ya se sumó al recibirlo NO se descuenta (si hace falta, corregilo en Inventario).` : "") +
+        `\n\nSi solo no se va a pedir, mejor usá ✕ Cancelar (queda en el historial).`
+    )
+  )
+    return;
+  const { data, error } = await sb.from("pedidos").delete().eq("id", id).select("id");
+  if (error) return alert(`No se pudo borrar.\n\nDetalle: ${error.message}`);
+  if (!data?.length) {
+    return alert("La base no permitió borrar el pedido.\n\nFalta ejecutar supabase/pedidos_v2.sql en Supabase, o tu usuario no tiene permiso.");
+  }
+  toast(`🗑 Pedido #${id} borrado`);
+  await loadPedidos();
+  refreshAlertBadge();
+  renderCurrentTab();
+}
 
 // ── Envío de mail ────────────────────────────────────────────
 async function enviarMailPedido(pedidoId) {
@@ -1334,7 +1485,7 @@ async function enviarMailPedido(pedidoId) {
     }
   }
   await loadPedidos();
-  if (state.currentTab === "pedidos") renderPedidos();
+  if (state.currentTab === "pedidos" || state.currentTab === "recibidos") renderCurrentTab();
 }
 
 function textoPedido(ped) {
@@ -1370,38 +1521,62 @@ function abrirMailto(pedidoId) {
     `mailto:${DESTINATARIOS_PEDIDO.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(textoPedido(ped))}`;
 }
 
-// ── Pestaña PEDIDOS ──────────────────────────────────────────
+// ── Pestañas PEDIDOS (abiertos) y RECIBIDOS (archivo) ───────
+const AVISO_SIN_MODULO = `
+  <div class="unknown-card">
+    <h3>⚠  El módulo de pedidos todavía no está activado</h3>
+    <p>Un administrador tiene que ejecutar <b>supabase/pedidos.sql</b> en el SQL Editor de Supabase
+    (ver <b>supabase/SETUP.md</b>, paso 11). No borra ni cambia ningún producto.</p>
+  </div>`;
+
 function renderPedidos() {
+  renderVistaPedidos({
+    vista: "abiertos",
+    titulo: "🛒  Pedidos",
+    filtroKey: "pedFiltro",
+    filtros: [
+      ["abiertos", "Todos los pendientes"],
+      ...(state.hasPedidosV2 ? [["Pendiente", "Falta pedir al proveedor"]] : []),
+      ["Pedido", "Pedidos, esperando entrega"],
+    ],
+  });
+}
+
+function renderRecibidos() {
+  renderVistaPedidos({
+    vista: "archivo",
+    titulo: "📦  Recibidos",
+    filtroKey: "archFiltro",
+    filtros: [
+      ["Recibido", "Recibidos"],
+      ["Cancelado", "Cancelados"],
+      ["archivo", "Todos"],
+    ],
+  });
+}
+
+function renderVistaPedidos({ vista, titulo, filtroKey, filtros }) {
   const content = $("#content");
   if (!state.hasPedidos) {
-    content.innerHTML = `
-      <h2 class="tab-title">🛒  Pedidos</h2>
-      <div class="unknown-card">
-        <h3>⚠  El módulo de pedidos todavía no está activado</h3>
-        <p>Un administrador tiene que ejecutar <b>supabase/pedidos.sql</b> en el SQL Editor de Supabase
-        (ver <b>supabase/SETUP.md</b>, paso 11). No borra ni cambia ningún producto.</p>
-      </div>`;
+    content.innerHTML = `<h2 class="tab-title">${titulo}</h2>${AVISO_SIN_MODULO}`;
     return;
   }
+  if (!filtros.some(([v]) => v === state[filtroKey])) state[filtroKey] = filtros[0][0];
   content.innerHTML = `
-    <h2 class="tab-title">🛒  Pedidos</h2>
+    <h2 class="tab-title">${titulo}</h2>
+    ${state.hasPedidosV2 ? "" : `<p class="hint" style="color:var(--yellow)">⚠ Falta ejecutar <b>supabase/pedidos_v2.sql</b> para activar el estado "Pendiente" y el borrado de pedidos.</p>`}
     <div class="toolbar">
       <div class="hist-filters" style="margin:0">
-        ${[
-          ["abiertos", "En curso"],
-          ["Recibido", "Recibidos"],
-          ["Cancelado", "Cancelados"],
-          ["todos", "Todos"],
-        ]
+        ${filtros
           .map(
             ([v, l]) =>
-              `<label><input type="radio" name="ped-filtro" value="${v}" ${state.pedFiltro === v ? "checked" : ""}/> ${l}</label>`
+              `<label><input type="radio" name="ped-filtro" value="${v}" ${state[filtroKey] === v ? "checked" : ""}/> ${l}</label>`
           )
           .join("")}
       </div>
       <input type="text" id="ped-search" placeholder="Buscar insumo, proveedor, #…" />
       <div class="spacer"></div>
-      <button class="btn-accent btn-inline" id="ped-nuevo">＋  Nuevo pedido manual</button>
+      ${vista === "abiertos" ? `<button class="btn-accent btn-inline" id="ped-nuevo">＋  Nuevo pedido manual</button>` : ""}
     </div>
     <table class="data-table">
       <thead>
@@ -1415,12 +1590,12 @@ function renderPedidos() {
   `;
   $all('input[name="ped-filtro"]').forEach((r) =>
     r.addEventListener("change", (e) => {
-      state.pedFiltro = e.target.value;
+      state[filtroKey] = e.target.value;
       renderPedidoRows();
     })
   );
   $("#ped-search").addEventListener("input", renderPedidoRows);
-  $("#ped-nuevo").addEventListener("click", abrirPedidoManual);
+  $("#ped-nuevo")?.addEventListener("click", abrirPedidoManual);
   renderPedidoRows();
 }
 
@@ -1430,7 +1605,7 @@ const MAIL_BADGE = {
   error: ["⚠", "badge-red", "No se pudo enviar"],
   pendiente: ["…", "badge-gray", "Pendiente de envío"],
 };
-const ESTADO_BADGE = { Pedido: "badge-blue", Recibido: "badge-green", Cancelado: "badge-gray" };
+const ESTADO_BADGE = { Pendiente: "badge-orange", Pedido: "badge-blue", Recibido: "badge-green", Cancelado: "badge-gray" };
 
 // Entregas parciales: cantidad_recibida es ACUMULADA (suma de todas las entregas)
 const recibidoDe = (it) => Number(it.cantidad_recibida) || 0;
@@ -1441,17 +1616,21 @@ function estadoPedidoHtml(p) {
   const items = p.pedido_items || [];
   const llegoAlgo = items.some((i) => recibidoDe(i) > 0);
   const falta = items.some((i) => pendienteDe(i) > 0);
-  if (p.estado === "Pedido" && llegoAlgo) return `<span class="badge badge-yellow" title="Llegó una parte, falta el resto">Parcial</span>`;
+  if (esAbierto(p) && llegoAlgo) return `<span class="badge badge-yellow" title="Llegó una parte, falta el resto">Parcial</span>`;
+  if (p.estado === "Pendiente") return `<span class="badge badge-orange" title="Falta pedírselo al proveedor">Pendiente</span>`;
+  if (p.estado === "Pedido" && p.fecha_pedido_prov)
+    return `<span class="badge badge-blue">Pedido</span><br><span class="muted">${new Date(p.fecha_pedido_prov).toLocaleDateString("es-AR")}${p.pedido_por ? ` · ${escapeHtml(p.pedido_por)}` : ""}</span>`;
   if (p.estado === "Recibido" && falta) return `<span class="badge badge-green" title="Se cerró con mercadería faltante">Recibido</span><br><span class="muted" style="color:var(--yellow)">con faltante</span>`;
   return `<span class="badge ${ESTADO_BADGE[p.estado]}">${p.estado}</span>`;
 }
 
 function renderPedidoRows() {
   const q = ($("#ped-search")?.value || "").trim().toLowerCase();
-  const f = state.pedFiltro;
+  const enArchivo = state.currentTab === "recibidos";
+  const f = enArchivo ? state.archFiltro : state.pedFiltro;
   const rows = state.pedidos.filter((p) => {
-    if (f === "abiertos" && p.estado !== "Pedido") return false;
-    if (f !== "abiertos" && f !== "todos" && p.estado !== f) return false;
+    if (enArchivo === esAbierto(p)) return false; // abiertos en Pedidos, cerrados en Recibidos
+    if (f !== "abiertos" && f !== "archivo" && p.estado !== f) return false;
     if (!q) return true;
     const hay = [p.id, p.proveedor, p.categoria, p.usuario, p.obs, ...(p.pedido_items || []).map((i) => `${i.descripcion} ${i.codigo} ${i.marca} ${i.color}`)]
       .join(" ")
@@ -1461,7 +1640,9 @@ function renderPedidoRows() {
 
   const tbody = $("#ped-tbody");
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="center" style="color:var(--fg2);padding:24px">No hay pedidos para mostrar.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="center" style="color:var(--fg2);padding:24px">${
+      enArchivo ? "No hay pedidos para mostrar." : "✓ No hay pedidos pendientes. Los recibidos están en 📦 Recibidos."
+    }</td></tr>`;
     return;
   }
   tbody.innerHTML = rows
@@ -1492,11 +1673,14 @@ function renderPedidoRows() {
           <td class="center">${estadoPedidoHtml(p)}${p.fecha_recibido ? `<br><span class="muted">${new Date(p.fecha_recibido).toLocaleDateString("es-AR")}</span>` : ""}</td>
           <td class="center"><span class="badge ${mCls}" title="${escapeHtml(p.email_detalle || mTit)}">${mIcon}</span></td>
           <td class="actions center">
-            ${p.estado === "Pedido" ? `<button class="icon-btn" data-act="recibir" data-id="${p.id}" title="Registrar lo que llegó (suma al stock). Se puede hacer en varias entregas.">📦 Recibir</button>` : ""}
-            ${p.estado !== "Pedido" ? `<button class="icon-btn" data-act="reabrir" data-id="${p.id}" title="Reabrir el pedido (ej: el proveedor trae el resto otro día)">↺ Reabrir</button>` : ""}
+            ${p.estado === "Pendiente" ? `<button class="icon-btn btn-marcar" data-act="marcar" data-id="${p.id}" title="Ya se lo pedimos al proveedor">✓ Marcar pedido</button>` : ""}
+            ${esAbierto(p) ? `<button class="icon-btn" data-act="recibir" data-id="${p.id}" title="Registrar lo que llegó (suma al stock). Se puede hacer en varias entregas.">📦 Recibir</button>` : ""}
+            ${!esAbierto(p) ? `<button class="icon-btn" data-act="reabrir" data-id="${p.id}" title="Reabrir el pedido (ej: el proveedor trae el resto otro día)">↺ Reabrir</button>` : ""}
+            ${puedeEditar(p) ? `<button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar pedido">✎</button>` : ""}
             <button class="icon-btn" data-act="pdf" data-id="${p.id}" title="Descargar orden en PDF">⬇ PDF</button>
-            ${p.estado === "Pedido" ? `<button class="icon-btn" data-act="mail" data-id="${p.id}" title="Volver a enviar el mail">✉</button>` : ""}
-            ${p.estado === "Pedido" ? `<button class="icon-btn danger" data-act="cancelar" data-id="${p.id}" title="Cancelar pedido">✕</button>` : ""}
+            ${esAbierto(p) ? `<button class="icon-btn" data-act="mail" data-id="${p.id}" title="Volver a enviar el mail">✉</button>` : ""}
+            ${esAbierto(p) ? `<button class="icon-btn danger" data-act="cancelar" data-id="${p.id}" title="Cancelar pedido">✕</button>` : ""}
+            ${puedeBorrar() && state.hasPedidosV2 ? `<button class="icon-btn danger" data-act="borrar" data-id="${p.id}" title="Borrar pedido definitivamente">🗑</button>` : ""}
           </td>
         </tr>`;
     })
@@ -1510,6 +1694,9 @@ function renderPedidoRows() {
       if (b.dataset.act === "mail") enviarMailPedido(id);
       if (b.dataset.act === "cancelar") cancelarPedido(id);
       if (b.dataset.act === "reabrir") reabrirPedido(id);
+      if (b.dataset.act === "marcar") marcarPedido(id);
+      if (b.dataset.act === "editar") abrirEditarPedido(id);
+      if (b.dataset.act === "borrar") borrarPedido(id);
     })
   );
 }
@@ -1538,9 +1725,10 @@ async function reabrirPedido(id) {
     )
   )
     return;
-  const { error } = await sb.from("pedidos").update({ estado: "Pedido", fecha_recibido: null }).eq("id", id);
+  const estado = state.hasPedidosV2 && !ped.fecha_pedido_prov && ped.estado === "Cancelado" ? "Pendiente" : "Pedido";
+  const { error } = await sb.from("pedidos").update({ estado, fecha_recibido: null }).eq("id", id);
   if (error) return alert(`No se pudo reabrir.\n\nDetalle: ${error.message}`);
-  toast(`↺ Pedido #${id} reabierto`);
+  toast(`↺ Pedido #${id} reabierto — está de nuevo en 🛒 Pedidos`);
   await loadPedidos();
   refreshAlertBadge();
   renderCurrentTab();
@@ -1635,6 +1823,10 @@ $("#recibir-confirm").addEventListener("click", async () => {
   const faltantes = filas.filter(({ it }) => recibidoNuevo[it.id] < Number(it.cantidad));
   const completo = faltantes.length === 0;
   let error = null;
+  if (!completo && !cerrarIgual && ped.estado === "Pendiente") {
+    // llegó una parte de algo que figuraba "Pendiente": evidentemente ya se pidió
+    ({ error } = await sb.from("pedidos").update({ estado: "Pedido", fecha_pedido_prov: new Date().toISOString(), pedido_por: state.currentUserLabel }).eq("id", ped.id));
+  }
   if (completo || cerrarIgual) {
     ({ error } = await sb
       .from("pedidos")
@@ -1646,9 +1838,9 @@ $("#recibir-confirm").addEventListener("click", async () => {
   if (error || errores.length) {
     alert(`La recepción se registró con problemas:\n\n${[error?.message, ...errores].filter(Boolean).join("\n")}`);
   } else if (completo) {
-    toast(`✓ Pedido #${ped.id} recibido completo y stock actualizado`);
+    toast(`✓ Pedido #${ped.id} recibido completo y stock actualizado — pasó a 📦 Recibidos`);
   } else if (cerrarIgual) {
-    toast(`Pedido #${ped.id} cerrado con faltante (${faltantes.length} ítem${faltantes.length > 1 ? "s" : ""})`);
+    toast(`Pedido #${ped.id} cerrado con faltante (${faltantes.length} ítem${faltantes.length > 1 ? "s" : ""}) — pasó a 📦 Recibidos`);
   } else {
     toast(`📦 Entrega parcial registrada. El pedido #${ped.id} sigue abierto: falta${faltantes.length > 1 ? "n" : ""} ${faltantes.length} ítem${faltantes.length > 1 ? "s" : ""}`);
   }
