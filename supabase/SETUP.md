@@ -83,3 +83,36 @@ Si un día no hay conexión en el pañol, se puede seguir usando el `.exe` viejo
 - No usar el `.exe` y la web al mismo tiempo como si fueran la misma fuente de verdad — el `.exe` tiene su propia base local (`stockscanner.db`) que ya no se sincroniza con Supabase.
 - Cuando vuelva la conexión, un encargado tiene que revisar los movimientos que se hicieron en el `.exe` durante el corte y cargarlos a mano en la web (o decidir cuál de las dos versiones de stock es la correcta).
 - Este modo es solo para cortes puntuales, no para uso regular.
+
+## 11. Activar el módulo de PEDIDOS (alerta de stock mínimo → orden → mail)
+
+### 11.a Base de datos (obligatorio, 1 minuto)
+
+**SQL Editor → New query** → pegá todo `supabase/pedidos.sql` → **Run**.
+
+Es 100% aditivo: no borra ni cambia ningún producto ni movimiento. Agrega a `productos` las
+columnas opcionales `marca`, `color`, `medida`, `proveedor`, `unidad`, `cant_reposicion` y crea
+las tablas `pedidos` y `pedido_items`. Se puede correr más de una vez sin problema.
+
+Hasta que no se ejecute, la web sigue funcionando igual que antes (el popup de alertas aparece,
+pero la pestaña Pedidos avisa que falta activarlo).
+
+### 11.b Envío automático de mails (Edge Function)
+
+Mientras esto no esté configurado, al confirmar un pedido la web ofrece abrir el programa de
+correo de la PC con el pedido ya escrito para Sergio y Leo (no se pierde ningún pedido).
+
+1. Elegí cómo se mandan los mails (una de las dos):
+   - **Resend (recomendado)**: creá cuenta en https://resend.com → *Domains* → agregá
+     `grupoaixa.com.ar` y cargá en el DNS del dominio los registros que te muestra → *API Keys* → creá una.
+   - **Gmail**: con una cuenta de Gmail con verificación en 2 pasos → https://myaccount.google.com/apppasswords
+     → creá una "contraseña de aplicación".
+2. Supabase → **Edge Functions → Secrets** → agregá:
+   - Resend: `RESEND_API_KEY` = la key, y `MAIL_FROM` = `Pedidos Aixa <pedidos@grupoaixa.com.ar>`
+   - Gmail: `GMAIL_USER` = la casilla, `GMAIL_APP_PASSWORD` = la contraseña de aplicación
+3. Supabase → **Edge Functions → Deploy a new function → Via Editor** → nombre: `enviar-pedido`
+   → pegá el contenido de `supabase/functions/enviar-pedido/index.ts` → **Deploy**.
+   (Dejar activado "Verify JWT": solo usuarios logueados pueden mandar pedidos.)
+
+Los destinatarios (sergio@grupoaixa.com.ar y leo@grupoaixa.com.ar) están fijos dentro de la
+función. Para cambiarlos, editá `DESTINATARIOS` en ese archivo y en `docs/app.js`.

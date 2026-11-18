@@ -64,6 +64,10 @@
           <span class="nav-main">⚠  Alertas</span>
           <span class="nav-sub">Stock bajo mínimo</span>
         </button>
+        <button class="nav-btn" data-tab="pedidos" id="nav-pedidos">
+          <span class="nav-main">🛒  Pedidos</span>
+          <span class="nav-sub">Órdenes de compra</span>
+        </button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -94,6 +98,60 @@
       </div>
     </div>
   </div>
+
+  <!-- ── POPUP: alerta de insumos a pedir (pantalla inicial) ── -->
+  <div id="alert-popup" class="alert-popup hidden" role="alert" aria-live="polite">
+    <div class="alert-popup-head">
+      <span id="alert-popup-title">⚠ Insumos para pedir</span>
+      <button id="alert-popup-toggle" class="icon-btn" title="Minimizar / expandir">▾</button>
+    </div>
+    <div id="alert-popup-body" class="alert-popup-body"></div>
+  </div>
+
+  <!-- ── MODAL: orden de pedido ───────────────────────────── -->
+  <div id="pedido-modal" class="modal hidden">
+    <div class="modal-card modal-wide">
+      <h2 id="pedido-modal-title">🛒 Orden de pedido</h2>
+      <div class="ped-grid">
+        <label>Categoría<input id="ped-categoria" list="ped-cat-list" placeholder="Herraje, Placa de Melamina…" /></label>
+        <label>Proveedor<input id="ped-proveedor" list="ped-prov-list" placeholder="Opcional" /></label>
+        <label>Urgencia
+          <select id="ped-urgencia"><option>Normal</option><option>Urgente</option></select>
+        </label>
+      </div>
+      <div class="ped-items-head">
+        <span>Insumo</span><span>Marca</span><span>Color</span><span>Medida</span><span>Cantidad</span><span>Unidad</span><span></span>
+      </div>
+      <div id="ped-items"></div>
+      <button id="ped-add-item" class="btn-tool" type="button">＋ Agregar ítem</button>
+      <p class="hint">Escribí el nombre de un producto del stock para autocompletar, o escribí uno nuevo si es un insumo que todavía no existe.</p>
+      <label class="ped-obs-label">Observaciones
+        <textarea id="ped-obs" rows="2" placeholder="Ej: entregar en planta, consultar precio…"></textarea>
+      </label>
+      <p class="hint">✉ Al confirmar se envía por mail a sergio@grupoaixa.com.ar y leo@grupoaixa.com.ar</p>
+      <div class="modal-actions">
+        <button id="ped-confirm" class="btn-accent">✉  Confirmar y enviar pedido</button>
+        <button id="ped-cancel" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MODAL: recibir pedido ────────────────────────────── -->
+  <div id="recibir-modal" class="modal hidden">
+    <div class="modal-card modal-wide">
+      <h2 id="recibir-title">📦 Recibir pedido</h2>
+      <p class="hint">Cargá lo que llegó. Los insumos que están en el stock se suman automáticamente como ENTRADA.</p>
+      <div id="recibir-items"></div>
+      <div class="modal-actions">
+        <button id="recibir-confirm" class="btn-accent">✓  Confirmar recepción</button>
+        <button id="recibir-cancel" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <datalist id="prod-datalist"></datalist>
+  <datalist id="ped-cat-list"></datalist>
+  <datalist id="ped-prov-list"></datalist>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
