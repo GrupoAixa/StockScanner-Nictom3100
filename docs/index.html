@@ -142,6 +142,28 @@
     </div>
   </div>
 
+  <!-- ── MODAL: crear en inventario un insumo nuevo del pedido ── -->
+  <div id="nuevo-prod-modal" class="modal modal-top hidden">
+    <div class="modal-card">
+      <h2>⚠ Este insumo no está en el inventario</h2>
+      <p id="np-texto" class="modal-producto"></p>
+      <p class="hint">¿Querés crearlo y guardarlo en el inventario? Si no, se pide igual como insumo nuevo.</p>
+      <label for="np-nombre">Nombre</label>
+      <input id="np-nombre" />
+      <label for="np-codigo">Código de barras (generado, se puede cambiar)</label>
+      <input id="np-codigo" />
+      <label for="np-categoria">Categoría</label>
+      <input id="np-categoria" list="ped-cat-list" />
+      <label for="np-stock-min">Stock mínimo (alerta)</label>
+      <input id="np-stock-min" type="number" min="0" value="5" />
+      <p class="hint">Se crea con stock 0. Cuando llegue el pedido y lo recibas, se suma solo.</p>
+      <div class="modal-actions">
+        <button id="np-crear" class="btn-accent">＋ Crear y guardar</button>
+        <button id="np-no" class="btn-secondary">No, solo pedirlo</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── MODAL: recibir pedido ────────────────────────────── -->
   <div id="recibir-modal" class="modal hidden">
     <div class="modal-card modal-wide">

@@ -342,6 +342,8 @@ tr.tipo-ajuste td.tipo-cell { color: var(--yellow); }
 .pi-tag { display: block; font-size: 10px; margin-top: 3px; min-height: 12px; }
 .pi-tag.tag-stock { color: var(--green); }
 .pi-tag.tag-nuevo { color: var(--accent2); }
+.pi-tag .pi-crear { background: none; border: none; padding: 0 0 0 6px; color: var(--accent); font-size: 10px; cursor: pointer; text-decoration: underline; }
+.modal.modal-top { z-index: 110; }
 .ped-obs-label { margin-top: 14px !important; }
 .recibir-row {
   display: grid; grid-template-columns: 1fr 120px 220px; gap: 12px; align-items: center;

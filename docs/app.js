@@ -1324,6 +1324,11 @@ function agregarFilaItem(it = {}) {
       }
     }
     actualizarTagFila(row);
+    // insumo escrito a mano que no está en el inventario: ofrecer crearlo (una vez por texto)
+    if (v && !row.dataset.codigo && row.dataset.ofrecido !== v) {
+      row.dataset.ofrecido = v;
+      ofrecerCrearProducto(row);
+    }
   });
   $(".pi-del", row).addEventListener("click", () => {
     if (Number(row.dataset.recibido) > 0 &&
@@ -1340,13 +1345,105 @@ function actualizarTagFila(row) {
     tag.textContent = `Cód ${row.dataset.codigo} · stock ${row.dataset.stock}`;
     tag.className = "pi-tag tag-stock";
   } else if (desc) {
-    tag.textContent = "Insumo nuevo (no está en stock)";
+    tag.innerHTML = `Insumo nuevo (no está en stock)<button type="button" class="pi-crear">＋ crear en inventario</button>`;
     tag.className = "pi-tag tag-nuevo";
+    $(".pi-crear", tag).addEventListener("click", () => ofrecerCrearProducto(row));
   } else {
     tag.textContent = "";
     tag.className = "pi-tag";
   }
 }
+
+// ── Crear en el inventario un insumo nuevo escrito en el pedido ──
+// Código: 2 primeras letras de cada palabra + las medidas completas.
+// Ej: "Bisagra cazoleta Blum 35mm" → BICABL35MM · "Melamina blanca 18mm 2,75x1,83" → MEBL18MM275X183
+const PALABRAS_VACIAS = new Set(["de", "del", "la", "el", "los", "las", "para", "con", "sin", "y", "o", "en", "a", "x", "por"]);
+
+function generarCodigo(nombre) {
+  const partes = sinAcentos(nombre)
+    .toUpperCase()
+    .split(/[\s\-\/]+/)
+    .map((w) => w.replace(/[^A-Z0-9×X,.]/g, ""))
+    .filter((w) => w && !PALABRAS_VACIAS.has(w.toLowerCase()))
+    .map((w) => (/\d/.test(w) ? w.replace(/[^A-Z0-9]/g, "") : w.replace(/[^A-Z]/g, "").slice(0, 2)));
+  const base = partes.join("") || "INS";
+  let codigo = base;
+  for (let n = 2; productoPorCodigo(codigo); n++) codigo = `${base}-${n}`;
+  return codigo;
+}
+
+let nuevoProdRow = null;
+
+function ofrecerCrearProducto(row) {
+  const nombre = $(".pi-desc", row).value.trim();
+  if (!nombre) return;
+  nuevoProdRow = row;
+  $("#np-texto").textContent = `"${nombre}"`;
+  $("#np-nombre").value = nombre;
+  $("#np-codigo").value = generarCodigo(nombre);
+  $("#np-categoria").value = $("#ped-categoria").value.trim();
+  $("#np-stock-min").value = "5";
+  $("#np-crear").disabled = false;
+  $("#nuevo-prod-modal").classList.remove("hidden");
+  $("#np-crear").focus();
+}
+
+function cerrarNuevoProd() {
+  $("#nuevo-prod-modal").classList.add("hidden");
+  nuevoProdRow?.querySelector(".pi-cantidad")?.focus();
+  nuevoProdRow = null;
+}
+
+$("#np-no").addEventListener("click", cerrarNuevoProd);
+
+$("#np-nombre").addEventListener("input", () => {
+  $("#np-codigo").value = generarCodigo($("#np-nombre").value);
+});
+
+$("#np-crear").addEventListener("click", async () => {
+  const row = nuevoProdRow;
+  if (!row) return;
+  const nombre = $("#np-nombre").value.trim();
+  const codigo = $("#np-codigo").value.trim();
+  if (!nombre || !codigo) return alert("Nombre y código son obligatorios.");
+  const existe = productoPorCodigo(codigo);
+  if (existe) return alert(`El código '${codigo}' ya lo usa "${existe.nombre}". Cambialo.`);
+
+  const payload = {
+    codigo,
+    nombre,
+    categoria: $("#np-categoria").value.trim(),
+    precio: 0,
+    stock: 0,
+    stock_min: Math.max(0, parseInt($("#np-stock-min").value, 10) || 0),
+    creado: nowStamp(),
+  };
+  if (state.hasProdExtras) {
+    const auto = inferirDatos(nombre);
+    payload.marca = $(".pi-marca", row).value.trim() || auto.marca;
+    payload.color = $(".pi-color", row).value.trim() || auto.color;
+    payload.medida = $(".pi-medida", row).value.trim() || auto.medida;
+    payload.unidad = $(".pi-unidad", row).value;
+    payload.proveedor = $("#ped-proveedor").value.trim();
+  }
+
+  $("#np-crear").disabled = true;
+  const { error } = await sb.from("productos").insert(payload);
+  if (error) {
+    $("#np-crear").disabled = false;
+    return alert(error.code === "23505" ? `El código '${codigo}' ya existe. Cambialo.` : `No se pudo crear.\n\nDetalle: ${error.message}`);
+  }
+  await loadProductos();
+  refreshAlertBadge();
+  // la fila del pedido queda ligada al producto recién creado
+  $(".pi-desc", row).value = nombre;
+  row.dataset.codigo = codigo;
+  row.dataset.stock = "0";
+  row.dataset.ofrecido = nombre;
+  actualizarTagFila(row);
+  toast(`✓ "${nombre}" guardado en el inventario con código ${codigo}`);
+  cerrarNuevoProd();
+});
 
 $("#ped-add-item").addEventListener("click", () => {
   agregarFilaItem({});
@@ -1968,5 +2065,7 @@ function pdfPedido(id) {
 // Cerrar modales con Escape
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // si está abierto el aviso de insumo nuevo, Escape cierra solo ese (el pedido sigue abierto)
+  if (!$("#nuevo-prod-modal").classList.contains("hidden")) return cerrarNuevoProd();
   ["#pedido-modal", "#recibir-modal", "#edit-stock-modal"].forEach((m) => $(m).classList.add("hidden"));
 });
