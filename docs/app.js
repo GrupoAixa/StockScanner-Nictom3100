@@ -1360,12 +1360,21 @@ function actualizarTagFila(row) {
 const PALABRAS_VACIAS = new Set(["de", "del", "la", "el", "los", "las", "para", "con", "sin", "y", "o", "en", "a", "x", "por"]);
 
 function generarCodigo(nombre) {
-  const partes = sinAcentos(nombre)
+  const tokens = sinAcentos(nombre)
     .toUpperCase()
+    .replace(/×/g, "X")
     .split(/[\s\-\/]+/)
-    .map((w) => w.replace(/[^A-Z0-9×X,.]/g, ""))
-    .filter((w) => w && !PALABRAS_VACIAS.has(w.toLowerCase()))
-    .map((w) => (/\d/.test(w) ? w.replace(/[^A-Z0-9]/g, "") : w.replace(/[^A-Z]/g, "").slice(0, 2)));
+    .map((w) => w.replace(/[^A-Z0-9,.]/g, ""))
+    .filter(Boolean);
+  const esNum = (w) => /^\d/.test(w || "");
+  const partes = tokens
+    .map((w, i) => {
+      // "4 x 40" → la X entre dos números se conserva (4X40)
+      if (w === "X") return esNum(tokens[i - 1]) && esNum(tokens[i + 1]) ? "X" : "";
+      if (PALABRAS_VACIAS.has(w.toLowerCase())) return "";
+      return /\d/.test(w) ? w.replace(/[^A-Z0-9]/g, "") : w.replace(/[^A-Z]/g, "").slice(0, 2);
+    })
+    .filter(Boolean);
   const base = partes.join("") || "INS";
   let codigo = base;
   for (let n = 2; productoPorCodigo(codigo); n++) codigo = `${base}-${n}`;
