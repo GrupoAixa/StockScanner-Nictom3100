@@ -30,6 +30,9 @@ const state = {
   hasObra: false,          // se corrió supabase/v3_marcelo_obra_ocultos.sql (columna obra)
   hasOcultos: false,       // ídem (columna productos.oculto)
   stockVista: "activos",   // Inventario: activos | ocultos
+  hasHistPedidos: false,   // se corrió supabase/v4_leo_edita_historial_pedidos.sql
+  histPedidos: [],         // cambios en pedidos (tabla pedidos_historial)
+  histPedidoId: null,      // Historial filtrado a un solo pedido
 };
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -652,14 +655,33 @@ $("#edit-stock-confirm").addEventListener("click", async () => {
 // ── HISTORIAL ────────────────────────────────────────────────
 function renderHistorial() {
   const content = $("#content");
+  const f = state.histFiltro;
+  const radio = (v, txt) =>
+    `<label><input type="radio" name="hist-filtro" value="${v}" ${f === v ? "checked" : ""} /> ${txt}</label>`;
   content.innerHTML = `
     <h2 class="tab-title">⏱  Historial de Movimientos</h2>
     <div class="hist-filters">
-      <label><input type="radio" name="hist-filtro" value="todos" checked /> Todos</label>
-      <label><input type="radio" name="hist-filtro" value="entrada" /> Entradas</label>
-      <label><input type="radio" name="hist-filtro" value="salida" /> Salidas</label>
-      <label><input type="radio" name="hist-filtro" value="ajuste" /> Ajustes</label>
+      ${radio("todos", "Todos")}
+      ${radio("entrada", "Entradas")}
+      ${radio("salida", "Salidas")}
+      ${radio("ajuste", "Ajustes")}
+      ${state.hasHistPedidos ? radio("pedidos", "Cambios en pedidos") : ""}
     </div>
+    <div id="hist-body"></div>
+  `;
+  $all('input[name="hist-filtro"]').forEach((r) =>
+    r.addEventListener("change", (e) => {
+      state.histFiltro = e.target.value;
+      state.histPedidoId = null;
+      renderHistBody();
+    })
+  );
+  renderHistBody();
+}
+
+function renderHistBody() {
+  if (state.histFiltro === "pedidos") return renderHistPedidos();
+  $("#hist-body").innerHTML = `
     <table class="data-table">
       <thead>
         <tr>
@@ -669,15 +691,71 @@ function renderHistorial() {
         </tr>
       </thead>
       <tbody id="hist-tbody"></tbody>
-    </table>
-  `;
-  $all('input[name="hist-filtro"]').forEach((r) =>
-    r.addEventListener("change", (e) => {
-      state.histFiltro = e.target.value;
-      renderHistRows();
-    })
-  );
+    </table>`;
   renderHistRows();
+}
+
+// Cambios en pedidos: los registra la base sola (supabase/v4_leo_edita_historial_pedidos.sql)
+async function loadHistPedidos() {
+  let q = sb.from("pedidos_historial").select("*").order("fecha", { ascending: false }).order("id", { ascending: false });
+  q = state.histPedidoId ? q.eq("pedido_id", state.histPedidoId) : q.limit(500);
+  const { data, error } = await q;
+  if (error) {
+    console.warn("[historial pedidos]", error.message);
+    state.histPedidos = [];
+    return;
+  }
+  state.histPedidos = data;
+}
+
+async function renderHistPedidos() {
+  const body = $("#hist-body");
+  const id = state.histPedidoId;
+  body.innerHTML = `
+    <div class="hist-filters">
+      <input type="text" id="hist-ped-search" placeholder="Buscar: #pedido, usuario, obra, insumo…" style="flex:1;max-width:380px" />
+      ${id ? `<span>Mostrando solo el pedido <b>#${id}</b></span> <button class="btn-secondary" id="hist-ped-todos">Ver todos</button>` : ""}
+    </div>
+    <table class="data-table">
+      <thead><tr><th>Fecha</th><th class="center">Pedido</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead>
+      <tbody id="hist-ped-tbody"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody>
+    </table>`;
+  $("#hist-ped-todos")?.addEventListener("click", () => {
+    state.histPedidoId = null;
+    renderHistPedidos();
+  });
+  $("#hist-ped-search").addEventListener("input", renderHistPedRows);
+  await loadHistPedidos();
+  if (state.currentTab === "historial" && state.histFiltro === "pedidos") renderHistPedRows();
+}
+
+function renderHistPedRows() {
+  const tbody = $("#hist-ped-tbody");
+  if (!tbody) return;
+  const txt = ($("#hist-ped-search")?.value || "").trim().toLowerCase().replace(/^#/, "");
+  const rows = state.histPedidos.filter(
+    (h) => !txt || `${h.pedido_id} ${h.usuario} ${h.accion} ${h.detalle}`.toLowerCase().includes(txt)
+  );
+  tbody.innerHTML = rows.length
+    ? rows
+        .map(
+          (h) => `
+        <tr>
+          <td>${new Date(h.fecha).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}</td>
+          <td class="center"><b>#${h.pedido_id}</b></td>
+          <td>${escapeHtml(h.usuario)}</td>
+          <td>${escapeHtml(h.accion)}</td>
+          <td style="white-space:pre-line">${escapeHtml(h.detalle)}</td>
+        </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5" class="muted">No hay cambios registrados.</td></tr>`;
+}
+
+function verHistorialPedido(id) {
+  state.histFiltro = "pedidos";
+  state.histPedidoId = id;
+  showTab("historial");
 }
 
 function renderHistRows() {
@@ -1012,18 +1090,21 @@ function inferirDatos(nombre) {
 }
 
 async function detectSchema() {
-  const [a, b, c, d, e] = await Promise.all([
+  const [a, b, c, d, e, f] = await Promise.all([
     sb.from("pedidos").select("id").limit(1),
     sb.from("productos").select("marca,cant_reposicion").limit(1),
     sb.from("pedidos").select("pedido_por").limit(1),
     sb.from("pedidos").select("obra").limit(1),
     sb.from("productos").select("oculto").limit(1),
+    sb.from("pedidos_historial").select("id").limit(1),
   ]);
   state.hasPedidos = !a.error;
   state.hasProdExtras = !b.error;
   state.hasPedidosV2 = !c.error;
   state.hasObra = !d.error;
   state.hasOcultos = !e.error;
+  state.hasHistPedidos = !f.error;
+  if (!state.hasHistPedidos) console.warn("[v4] Falta ejecutar supabase/v4_leo_edita_historial_pedidos.sql");
   if (!state.hasObra || !state.hasOcultos) console.warn("[v3] Falta ejecutar supabase/v3_marcelo_obra_ocultos.sql");
   if (state.hasPedidos && !state.hasPedidosV2) console.warn("[pedidos] Falta ejecutar supabase/pedidos_v2.sql");
   if (!state.hasPedidos) console.warn("[pedidos] Falta ejecutar supabase/pedidos.sql:", a.error?.message);
@@ -1060,11 +1141,13 @@ const ESTADOS_ABIERTOS = ["Pendiente", "Pedido"];
 const esAbierto = (p) => ESTADOS_ABIERTOS.includes(p.estado);
 
 // ── Permisos ──
-// Admin y Sergio: borran pedidos y editan cualquiera. Leo y Marcelo: editan solo los "Pendiente"
-// (todos pueden marcar como pedido y recibir). Mismas reglas en la base: supabase/pedidos_v2.sql y v3.
-const esLeo = () => [USERS.leo.email, USERS.marcelo.email].includes(state.currentEmail);
+// Admin y Sergio: borran pedidos y editan cualquiera. Leo: edita cualquiera (no borra); cada cambio
+// queda en el historial. Marcelo: edita solo los "Pendiente". Todos pueden marcar como pedido y recibir.
+// Mismas reglas en la base: supabase/pedidos_v2.sql, v3 y v4 (sin v4, Leo sigue como Marcelo).
+const edicionRestringida = () =>
+  state.currentEmail === USERS.marcelo.email || (!state.hasHistPedidos && state.currentEmail === USERS.leo.email);
 const puedeBorrar = () => [USERS.admin.email, USERS.sergio.email].includes(state.currentEmail);
-const puedeEditar = (p) => !(esLeo() && p.estado !== "Pendiente");
+const puedeEditar = (p) => !(edicionRestringida() && p.estado !== "Pendiente");
 
 function pedidoAbiertoDe(codigo, exceptoId = null) {
   const c = normalizarCodigo(codigo);
@@ -1248,7 +1331,7 @@ function abrirEditarPedido(id) {
   const ped = state.pedidos.find((p) => p.id === id);
   if (!ped) return;
   if (!puedeEditar(ped)) {
-    return alert(`El pedido #${id} ya figura como "${ped.estado}".\n\nSolo Admin o Sergio pueden editarlo.`);
+    return alert(`El pedido #${id} ya figura como "${ped.estado}".\n\nSolo Admin, Sergio o Leo pueden editarlo.`);
   }
   pedidoEditando = ped;
   pedidoOrigen = ped.origen;
@@ -1850,6 +1933,7 @@ function renderPedidoRows() {
             ${!esAbierto(p) ? `<button class="icon-btn" data-act="reabrir" data-id="${p.id}" title="Reabrir el pedido (ej: el proveedor trae el resto otro día)">↺ Reabrir</button>` : ""}
             ${puedeEditar(p) ? `<button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar pedido">✎</button>` : ""}
             <button class="icon-btn" data-act="pdf" data-id="${p.id}" title="Descargar orden en PDF">⬇ PDF</button>
+            ${state.hasHistPedidos ? `<button class="icon-btn" data-act="historial" data-id="${p.id}" title="Ver quién modificó este pedido">⏱</button>` : ""}
             ${esAbierto(p) ? `<button class="icon-btn" data-act="mail" data-id="${p.id}" title="Volver a enviar el mail">✉</button>` : ""}
             ${esAbierto(p) ? `<button class="icon-btn danger" data-act="cancelar" data-id="${p.id}" title="Cancelar pedido">✕</button>` : ""}
             ${puedeBorrar() && state.hasPedidosV2 ? `<button class="icon-btn danger" data-act="borrar" data-id="${p.id}" title="Borrar pedido definitivamente">🗑</button>` : ""}
@@ -1869,6 +1953,7 @@ function renderPedidoRows() {
       if (b.dataset.act === "marcar") marcarPedido(id);
       if (b.dataset.act === "editar") abrirEditarPedido(id);
       if (b.dataset.act === "borrar") borrarPedido(id);
+      if (b.dataset.act === "historial") verHistorialPedido(id);
     })
   );
 }
