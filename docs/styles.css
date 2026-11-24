@@ -332,6 +332,7 @@ tr.tipo-ajuste td.tipo-cell { color: var(--yellow); }
 }
 .prod-form select { width: 100%; background: var(--bg3); border: none; color: var(--fg); padding: 8px; border-radius: 4px; margin-top: 4px; }
 .ped-grid { display: grid; grid-template-columns: 1fr 1fr 140px; gap: 12px; margin-bottom: 14px; }
+.ped-grid .ped-obra { grid-column: 1 / -1; }
 .ped-items-head, .ped-item-row {
   display: grid; grid-template-columns: minmax(200px, 3fr) 1fr 1fr 1fr 90px 130px 30px; gap: 6px; align-items: start;
 }

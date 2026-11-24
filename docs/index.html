@@ -19,6 +19,7 @@
         <button class="user-btn" data-user="admin">Admin</button>
         <button class="user-btn" data-user="sergio">Sergio</button>
         <button class="user-btn" data-user="leo">Leo</button>
+        <button class="user-btn" data-user="marcelo">Marcelo</button>
       </div>
 
       <form id="login-password-form" class="login-password-form hidden">
@@ -122,6 +123,7 @@
         <label>Urgencia
           <select id="ped-urgencia"><option>Normal</option><option>Urgente</option></select>
         </label>
+        <label id="ped-obra-wrap" class="ped-obra">Obra<input id="ped-obra" list="ped-obra-list" placeholder="¿Para qué obra es? (opcional) — Ej: Cocina Pérez" /></label>
       </div>
       <div class="ped-items-head">
         <span>Insumo</span><span>Marca</span><span>Color</span><span>Medida</span><span>Cantidad</span><span>Unidad</span><span></span>
@@ -158,6 +160,7 @@
   <datalist id="prod-datalist"></datalist>
   <datalist id="ped-cat-list"></datalist>
   <datalist id="ped-prov-list"></datalist>
+  <datalist id="ped-obra-list"></datalist>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>

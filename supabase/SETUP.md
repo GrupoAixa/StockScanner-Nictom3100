@@ -127,3 +127,17 @@ función. Para cambiarlos, editá `DESTINATARIOS` en ese archivo y en `docs/app.
 - **Editar**: todos, pero nadie puede cambiar la fecha, y Leo solo puede editar los que están "Pendiente".
   Estas reglas están en la base (no solo en la web).
 - La función de mail no cambia: no hace falta volver a publicarla.
+
+## 13. v3: usuario Marcelo, OBRA en pedidos y productos OCULTOS
+
+1. **SQL Editor → New query** → pegá `supabase/v3_marcelo_obra_ocultos.sql` → **Run**. No borra datos.
+2. **Authentication → Users → Add user → Create new user**: `marcelo@stockscanner.local`, la contraseña
+   que elijas, tildando **"Auto Confirm User"**.
+3. (Opcional, para que el mail muestre la obra) **Edge Functions → enviar-pedido** → reemplazá el código
+   por el de `supabase/functions/enviar-pedido/index.ts` → **Deploy**.
+
+- **Marcelo** tiene los mismos permisos que Leo: crea pedidos, los marca como pedidos, los recibe y
+  edita solo los "Pendiente". No puede borrar pedidos.
+- **Obra**: campo opcional en cada pedido; se ve en la lista, el PDF, el mail y se puede buscar.
+- **Ocultos**: en Inventario, el botón 🙈 oculta un producto (no aparece en las alertas ni en el popup
+  para pedir). En la vista "Ocultos" se vuelve a mostrar con 👁.

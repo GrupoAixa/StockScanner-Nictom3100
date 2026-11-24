@@ -7,6 +7,7 @@ const USERS = {
   admin:  { email: "admin@stockscanner.local",  label: "Admin" },
   sergio: { email: "sergio@stockscanner.local", label: "Sergio" },
   leo:    { email: "leo@stockscanner.local",    label: "Leo" },
+  marcelo:{ email: "marcelo@stockscanner.local", label: "Marcelo" },
 };
 const EMAIL_TO_NAME = Object.fromEntries(
   Object.values(USERS).map((u) => [u.email, u.label])
@@ -26,6 +27,9 @@ const state = {
   pedFiltro: "abiertos",   // pestaña Pedidos: abiertos | Pendiente | Pedido
   archFiltro: "Recibido",  // pestaña Recibidos: Recibido | Cancelado | todos
   hasPedidosV2: false,     // se corrió supabase/pedidos_v2.sql (estado Pendiente, borrar)
+  hasObra: false,          // se corrió supabase/v3_marcelo_obra_ocultos.sql (columna obra)
+  hasOcultos: false,       // ídem (columna productos.oculto)
+  stockVista: "activos",   // Inventario: activos | ocultos
 };
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -228,8 +232,11 @@ function renderCurrentTab() {
   renderers[state.currentTab]?.();
 }
 
+// Productos bajo el mínimo que generan alerta (los ocultos no avisan)
+const enAlerta = (p) => !p.oculto && p.stock <= p.stock_min;
+
 function refreshAlertBadge() {
-  const count = state.productos.filter((p) => p.stock <= p.stock_min).length;
+  const count = state.productos.filter(enAlerta).length;
   const label = $("#nav-alertas .nav-main");
   label.textContent = count > 0 ? `⚠  Alertas  (${count})` : "⚠  Alertas";
   const abiertos = state.pedidos.filter(esAbierto).length;
@@ -408,7 +415,12 @@ function renderStock() {
   const content = $("#content");
   content.innerHTML = `
     <h2 class="tab-title">☰  Inventario</h2>
+    ${state.hasOcultos ? "" : `<p class="hint" style="color:var(--yellow)">⚠ Falta ejecutar <b>supabase/v3_marcelo_obra_ocultos.sql</b> para poder ocultar productos.</p>`}
     <div class="toolbar">
+      ${state.hasOcultos ? `<div class="hist-filters" style="margin:0">
+        <label><input type="radio" name="stock-vista" value="activos" ${state.stockVista === "activos" ? "checked" : ""}/> Activos</label>
+        <label><input type="radio" name="stock-vista" value="ocultos" ${state.stockVista === "ocultos" ? "checked" : ""}/> 🙈 Ocultos <span id="stock-ocultos-count"></span></label>
+      </div>` : ""}
       <span>Buscar:</span>
       <input type="text" id="stock-search" />
       <div class="spacer"></div>
@@ -427,6 +439,12 @@ function renderStock() {
     </table>
   `;
   $("#stock-search").addEventListener("input", renderStockRows);
+  $all('input[name="stock-vista"]').forEach((r) =>
+    r.addEventListener("change", (e) => {
+      state.stockVista = e.target.value;
+      renderStockRows();
+    })
+  );
   $("#stock-export").addEventListener("click", exportCsv);
   $("#stock-export-pdf").addEventListener("click", exportPdf);
   renderStockRows();
@@ -435,9 +453,22 @@ function renderStock() {
 function renderStockRows() {
   const q = ($("#stock-search")?.value || "").trim().toLowerCase();
   const tbody = $("#stock-tbody");
+  const verOcultos = state.hasOcultos && state.stockVista === "ocultos";
+  const nOcultos = state.productos.filter((p) => p.oculto).length;
+  if ($("#stock-ocultos-count")) $("#stock-ocultos-count").textContent = nOcultos ? `(${nOcultos})` : "";
   const rows = [...state.productos]
+    .filter((p) => !!p.oculto === verOcultos)
     .filter((p) => !q || p.nombre.toLowerCase().includes(q) || p.codigo.toLowerCase().includes(q))
     .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="center" style="color:var(--fg2);padding:24px">${
+      verOcultos
+        ? "No hay productos ocultos. Usá 🙈 en la lista de Activos para ocultar los que casi no se usan (dejan de aparecer en las alertas)."
+        : "No hay productos para mostrar."
+    }</td></tr>`;
+    return;
+  }
 
   tbody.innerHTML = rows
     .map((p) => {
@@ -455,6 +486,9 @@ function renderStockRows() {
           <td class="actions center">
             <button class="icon-btn" data-action="edit-stock" data-id="${p.id}" title="Editar stock">✎ Stock</button>
             <button class="icon-btn" data-action="edit-producto" data-id="${p.id}" title="Editar producto">⚙</button>
+            ${state.hasOcultos ? (p.oculto
+              ? `<button class="icon-btn" data-action="ocultar" data-id="${p.id}" title="Volver a mostrar (vuelve a avisar en las alertas)">👁 Mostrar</button>`
+              : `<button class="icon-btn" data-action="ocultar" data-id="${p.id}" title="Ocultar (no aparece en las alertas para pedir)">🙈</button>`) : ""}
           </td>
         </tr>`;
     })
@@ -463,12 +497,27 @@ function renderStockRows() {
   $all('[data-action="edit-stock"]', tbody).forEach((btn) =>
     btn.addEventListener("click", () => openEditStockModal(btn.dataset.id))
   );
+  $all('[data-action="ocultar"]', tbody).forEach((btn) =>
+    btn.addEventListener("click", () => toggleOculto(btn.dataset.id))
+  );
   $all('[data-action="edit-producto"]', tbody).forEach((btn) =>
     btn.addEventListener("click", () => {
       showTab("productos");
       setTimeout(() => loadProductoInForm(btn.dataset.id), 0);
     })
   );
+}
+
+async function toggleOculto(id) {
+  const p = state.productos.find((x) => String(x.id) === String(id));
+  if (!p) return;
+  const oculto = !p.oculto;
+  const { error } = await sb.from("productos").update({ oculto }).eq("id", p.id);
+  if (error) return alert(`No se pudo actualizar.\n\nDetalle: ${error.message}`);
+  toast(oculto ? `🙈 "${p.nombre}" oculto — ya no aparece en las alertas` : `👁 "${p.nombre}" visible de nuevo`);
+  await loadProductos();
+  refreshAlertBadge();
+  renderStockRows();
 }
 
 function exportCsv() {
@@ -688,9 +737,9 @@ function renderProductos() {
           <input id="prod-proveedor" list="ped-prov-list" />
           <label>Unidad</label>
           <select id="prod-unidad">${UNIDADES.map((u) => `<option>${u}</option>`).join("")}</select>
-          <label>Cantidad a pedir al llegar al mínimo</label>
+          <label>Cantidad a pedir habitualmente</label>
           <input id="prod-cant-repo" type="number" min="0" value="0" />
-          <p class="hint">0 = la calcula sola (lleva el stock al doble del mínimo).</p>
+          <p class="hint">Si el stock está en o bajo el mínimo, el pedido propone lo que falta para llegar al mínimo. Este valor se usa cuando se pide sin estar bajo el mínimo (0 = lo que se pidió la última vez).</p>
         </div>
         <p class="hint">* campos obligatorios</p>
         <button class="btn-accent" id="prod-guardar">＋  Guardar Producto</button>
@@ -858,7 +907,7 @@ async function eliminarProducto(id) {
 function renderAlertas() {
   const content = $("#content");
   const alertas = state.productos
-    .filter((p) => p.stock <= p.stock_min)
+    .filter(enAlerta)
     .sort((a, b) => a.stock - b.stock);
 
   if (alertas.length === 0) {
@@ -963,14 +1012,19 @@ function inferirDatos(nombre) {
 }
 
 async function detectSchema() {
-  const [a, b, c] = await Promise.all([
+  const [a, b, c, d, e] = await Promise.all([
     sb.from("pedidos").select("id").limit(1),
     sb.from("productos").select("marca,cant_reposicion").limit(1),
     sb.from("pedidos").select("pedido_por").limit(1),
+    sb.from("pedidos").select("obra").limit(1),
+    sb.from("productos").select("oculto").limit(1),
   ]);
   state.hasPedidos = !a.error;
   state.hasProdExtras = !b.error;
   state.hasPedidosV2 = !c.error;
+  state.hasObra = !d.error;
+  state.hasOcultos = !e.error;
+  if (!state.hasObra || !state.hasOcultos) console.warn("[v3] Falta ejecutar supabase/v3_marcelo_obra_ocultos.sql");
   if (state.hasPedidos && !state.hasPedidosV2) console.warn("[pedidos] Falta ejecutar supabase/pedidos_v2.sql");
   if (!state.hasPedidos) console.warn("[pedidos] Falta ejecutar supabase/pedidos.sql:", a.error?.message);
 }
@@ -997,6 +1051,8 @@ function fillDatalists() {
     [...state.productos.map((p) => p.proveedor), ...state.pedidos.map((p) => p.proveedor)].filter(Boolean)
   );
   $("#ped-prov-list").innerHTML = [...provs].map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+  const obras = new Set(state.pedidos.map((p) => p.obra).filter(Boolean));
+  $("#ped-obra-list").innerHTML = [...obras].map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
 }
 
 // Pendiente (falta pedirlo al proveedor) y Pedido (esperando entrega) son pedidos "abiertos"
@@ -1004,9 +1060,9 @@ const ESTADOS_ABIERTOS = ["Pendiente", "Pedido"];
 const esAbierto = (p) => ESTADOS_ABIERTOS.includes(p.estado);
 
 // ── Permisos ──
-// Admin y Sergio: borran pedidos y editan cualquiera. Leo: edita solo los "Pendiente".
-// (las mismas reglas están en la base: supabase/pedidos_v2.sql)
-const esLeo = () => state.currentEmail === USERS.leo.email;
+// Admin y Sergio: borran pedidos y editan cualquiera. Leo y Marcelo: editan solo los "Pendiente"
+// (todos pueden marcar como pedido y recibir). Mismas reglas en la base: supabase/pedidos_v2.sql y v3.
+const esLeo = () => [USERS.leo.email, USERS.marcelo.email].includes(state.currentEmail);
 const puedeBorrar = () => [USERS.admin.email, USERS.sergio.email].includes(state.currentEmail);
 const puedeEditar = (p) => !(esLeo() && p.estado !== "Pendiente");
 
@@ -1033,7 +1089,9 @@ function sugerirItem(p) {
   const auto = inferirDatos(p.nombre);
   const prev = ultimoPedidoItemDe(p.codigo);
   let cantidad;
-  if (p.cant_reposicion > 0) cantidad = p.cant_reposicion;
+  // bajo el mínimo: se pide lo que falta para llegar al mínimo (editable en el pedido)
+  if (p.stock <= p.stock_min) cantidad = Math.max(1, p.stock_min - p.stock);
+  else if (p.cant_reposicion > 0) cantidad = p.cant_reposicion;
   else if (prev) cantidad = Number(prev.item.cantidad);
   else cantidad = Math.max(1, (p.stock_min || 0) * 2 - (p.stock || 0));
   return {
@@ -1052,7 +1110,7 @@ function sugerirItem(p) {
 
 function productosParaPedir() {
   return state.productos
-    .filter((p) => p.stock <= p.stock_min && !pedidoAbiertoDe(p.codigo))
+    .filter((p) => enAlerta(p) && !pedidoAbiertoDe(p.codigo))
     .sort((a, b) => a.stock - a.stock_min - (b.stock - b.stock_min));
 }
 
@@ -1079,7 +1137,7 @@ function renderAlertPopup() {
   if ($("#app-view").classList.contains("hidden")) return el.classList.add("hidden");
   const lista = state.hasPedidos
     ? productosParaPedir()
-    : state.productos.filter((p) => p.stock <= p.stock_min);
+    : state.productos.filter(enAlerta);
   if (!lista.length) {
     el.classList.add("hidden");
     return;
@@ -1170,6 +1228,8 @@ function abrirPedidoModal({ origen, items, proveedor = "", categoria = "" }) {
     origen === "alerta" ? "🛒 Orden de pedido — reposición por stock mínimo" : "🛒 Nuevo pedido manual";
   $("#ped-categoria").value = categoria;
   $("#ped-proveedor").value = proveedor;
+  $("#ped-obra").value = "";
+  $("#ped-obra-wrap").classList.toggle("hidden", !state.hasObra);
   $("#ped-urgencia").value = items.some((i) => i.stock_al_pedir === 0) ? "Urgente" : "Normal";
   $("#ped-obs").value = "";
   $("#ped-items").innerHTML = "";
@@ -1196,6 +1256,8 @@ function abrirEditarPedido(id) {
     `✎ Editar pedido #${ped.id} — creado el ${new Date(ped.fecha).toLocaleDateString("es-AR")} por ${ped.usuario} (la fecha no se modifica)`;
   $("#ped-categoria").value = ped.categoria || "";
   $("#ped-proveedor").value = ped.proveedor || "";
+  $("#ped-obra").value = ped.obra || "";
+  $("#ped-obra-wrap").classList.toggle("hidden", !state.hasObra);
   $("#ped-urgencia").value = ped.urgencia || "Normal";
   $("#ped-obs").value = ped.obs || "";
   $("#ped-items").innerHTML = "";
@@ -1337,6 +1399,7 @@ $("#ped-confirm").addEventListener("click", async () => {
       proveedor: $("#ped-proveedor").value.trim(),
       urgencia: $("#ped-urgencia").value,
       obs: $("#ped-obs").value.trim(),
+      ...(state.hasObra ? { obra: $("#ped-obra").value.trim() } : {}),
       usuario: state.currentUserLabel,
     })
     .select()
@@ -1381,6 +1444,7 @@ async function guardarEdicionPedido(items) {
     urgencia: $("#ped-urgencia").value,
     obs: $("#ped-obs").value.trim(),
   };
+  if (state.hasObra) header.obra = $("#ped-obra").value.trim();
   if (state.hasPedidosV2) Object.assign(header, { editado_por: state.currentUserLabel, fecha_editado: new Date().toISOString() });
   const { error: eH } = await sb.from("pedidos").update(header).eq("id", ped.id);
   if (eH) errores.push(eH.message);
@@ -1493,6 +1557,7 @@ function textoPedido(ped) {
   return (
     `Orden de pedido #${ped.id}${ped.urgencia === "Urgente" ? " (URGENTE)" : ""}\n` +
     `Fecha: ${new Date(ped.fecha).toLocaleString("es-AR")} · Pedido por: ${ped.usuario}\n` +
+    (ped.obra ? `Obra: ${ped.obra}\n` : "") +
     `Categoría: ${ped.categoria || "—"} · Proveedor: ${ped.proveedor || "—"}\n\n` +
     items
       .map(
@@ -1515,7 +1580,7 @@ function abrirMailto(pedidoId) {
   if (!ped) return;
   const items = ped.pedido_items || [];
   const subject =
-    `${ped.urgencia === "Urgente" ? "[URGENTE] " : ""}Pedido #${ped.id} — ` +
+    `${ped.urgencia === "Urgente" ? "[URGENTE] " : ""}Pedido #${ped.id}${ped.obra ? ` (Obra ${ped.obra})` : ""} — ` +
     (items.length === 1 ? `${items[0].cantidad} ${items[0].unidad} de ${items[0].descripcion}` : `${items.length} insumos`);
   window.location.href =
     `mailto:${DESTINATARIOS_PEDIDO.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(textoPedido(ped))}`;
@@ -1574,14 +1639,14 @@ function renderVistaPedidos({ vista, titulo, filtroKey, filtros }) {
           )
           .join("")}
       </div>
-      <input type="text" id="ped-search" placeholder="Buscar insumo, proveedor, #…" />
+      <input type="text" id="ped-search" placeholder="Buscar insumo, obra, proveedor, #…" />
       <div class="spacer"></div>
       ${vista === "abiertos" ? `<button class="btn-accent btn-inline" id="ped-nuevo">＋  Nuevo pedido manual</button>` : ""}
     </div>
     <table class="data-table">
       <thead>
         <tr>
-          <th>#</th><th>Fecha</th><th>Insumos</th><th>Categoría</th><th>Proveedor</th>
+          <th>#</th><th>Fecha</th><th>Insumos</th><th>Obra</th><th>Categoría</th><th>Proveedor</th>
           <th>Por</th><th class="center">Estado</th><th class="center">Mail</th><th class="center">Acciones</th>
         </tr>
       </thead>
@@ -1632,7 +1697,7 @@ function renderPedidoRows() {
     if (enArchivo === esAbierto(p)) return false; // abiertos en Pedidos, cerrados en Recibidos
     if (f !== "abiertos" && f !== "archivo" && p.estado !== f) return false;
     if (!q) return true;
-    const hay = [p.id, p.proveedor, p.categoria, p.usuario, p.obs, ...(p.pedido_items || []).map((i) => `${i.descripcion} ${i.codigo} ${i.marca} ${i.color}`)]
+    const hay = [p.id, p.obra, p.proveedor, p.categoria, p.usuario, p.obs, ...(p.pedido_items || []).map((i) => `${i.descripcion} ${i.codigo} ${i.marca} ${i.color}`)]
       .join(" ")
       .toLowerCase();
     return hay.includes(q);
@@ -1640,7 +1705,7 @@ function renderPedidoRows() {
 
   const tbody = $("#ped-tbody");
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="center" style="color:var(--fg2);padding:24px">${
+    tbody.innerHTML = `<tr><td colspan="10" class="center" style="color:var(--fg2);padding:24px">${
       enArchivo ? "No hay pedidos para mostrar." : "✓ No hay pedidos pendientes. Los recibidos están en 📦 Recibidos."
     }</td></tr>`;
     return;
@@ -1667,6 +1732,7 @@ function renderPedidoRows() {
           <td>${p.id}${p.urgencia === "Urgente" ? ' <span class="badge badge-red">URG</span>' : ""}</td>
           <td style="white-space:nowrap">${new Date(p.fecha).toLocaleDateString("es-AR")}<br><span class="muted">${p.origen === "alerta" ? "⚠ por alerta" : "✎ manual"}</span></td>
           <td>${items}${p.obs ? `<div class="muted">📝 ${escapeHtml(p.obs)}</div>` : ""}</td>
+          <td>${p.obra ? `<b>${escapeHtml(p.obra)}</b>` : "—"}</td>
           <td>${escapeHtml(p.categoria || "—")}</td>
           <td>${escapeHtml(p.proveedor || "—")}</td>
           <td>${escapeHtml(p.usuario || "—")}</td>
@@ -1867,9 +1933,14 @@ function pdfPedido(id) {
   doc.setTextColor(60);
   doc.text(`Grupo Aixa  ·  ${new Date(ped.fecha).toLocaleString("es-AR")}  ·  Pedido por: ${ped.usuario}`, 40, 64);
   doc.text(`Categoría: ${ped.categoria || "—"}     Proveedor: ${ped.proveedor || "—"}     Estado: ${ped.estado}`, 40, 80);
+  if (ped.obra) {
+    doc.setFontSize(12);
+    doc.setTextColor(30);
+    doc.text(`Obra: ${ped.obra}`, 40, 98);
+  }
 
   doc.autoTable({
-    startY: 96,
+    startY: ped.obra ? 112 : 96,
     head: [["Insumo", "Código", "Marca", "Color", "Medida", "Cantidad", ...(hayRecibido ? ["Recibido"] : [])]],
     body: (ped.pedido_items || []).map((i) => [
       i.descripcion,
