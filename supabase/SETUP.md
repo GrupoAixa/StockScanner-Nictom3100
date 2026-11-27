@@ -141,3 +141,12 @@ función. Para cambiarlos, editá `DESTINATARIOS` en ese archivo y en `docs/app.
 - **Obra**: campo opcional en cada pedido; se ve en la lista, el PDF, el mail y se puede buscar.
 - **Ocultos**: en Inventario, el botón 🙈 oculta un producto (no aparece en las alertas ni en el popup
   para pedir). En la vista "Ocultos" se vuelve a mostrar con 👁.
+
+## 14. v5: N° de ORDEN DE TRABAJO en pedidos
+
+1. **SQL Editor → New query** → pegá `supabase/v5_orden_trabajo_pedidos.sql` → **Run**. No borra datos.
+2. (Opcional, para que el mail muestre la OT) **Edge Functions → enviar-pedido** → reemplazá el código
+   por el de `supabase/functions/enviar-pedido/index.ts` → **Deploy**.
+
+- **Orden de trabajo**: campo opcional al lado de la Obra en cada pedido; se ve en la lista, el PDF,
+  el mail, se puede buscar y sus cambios quedan en el historial.

@@ -29,6 +29,7 @@ const state = {
   hasPedidosV2: false,     // se corrió supabase/pedidos_v2.sql (estado Pendiente, borrar)
   hasObra: false,          // se corrió supabase/v3_marcelo_obra_ocultos.sql (columna obra)
   hasOcultos: false,       // ídem (columna productos.oculto)
+  hasOT: false,            // se corrió supabase/v5_orden_trabajo_pedidos.sql (columna orden_trabajo)
   stockVista: "activos",   // Inventario: activos | ocultos
   hasHistPedidos: false,   // se corrió supabase/v4_leo_edita_historial_pedidos.sql
   histPedidos: [],         // cambios en pedidos (tabla pedidos_historial)
@@ -713,7 +714,7 @@ async function renderHistPedidos() {
   const id = state.histPedidoId;
   body.innerHTML = `
     <div class="hist-filters">
-      <input type="text" id="hist-ped-search" placeholder="Buscar: #pedido, usuario, obra, insumo…" style="flex:1;max-width:380px" />
+      <input type="text" id="hist-ped-search" placeholder="Buscar: #pedido, usuario, obra, OT, insumo…" style="flex:1;max-width:380px" />
       ${id ? `<span>Mostrando solo el pedido <b>#${id}</b></span> <button class="btn-secondary" id="hist-ped-todos">Ver todos</button>` : ""}
     </div>
     <table class="data-table">
@@ -1090,13 +1091,14 @@ function inferirDatos(nombre) {
 }
 
 async function detectSchema() {
-  const [a, b, c, d, e, f] = await Promise.all([
+  const [a, b, c, d, e, f, g] = await Promise.all([
     sb.from("pedidos").select("id").limit(1),
     sb.from("productos").select("marca,cant_reposicion").limit(1),
     sb.from("pedidos").select("pedido_por").limit(1),
     sb.from("pedidos").select("obra").limit(1),
     sb.from("productos").select("oculto").limit(1),
     sb.from("pedidos_historial").select("id").limit(1),
+    sb.from("pedidos").select("orden_trabajo").limit(1),
   ]);
   state.hasPedidos = !a.error;
   state.hasProdExtras = !b.error;
@@ -1104,6 +1106,8 @@ async function detectSchema() {
   state.hasObra = !d.error;
   state.hasOcultos = !e.error;
   state.hasHistPedidos = !f.error;
+  state.hasOT = !g.error;
+  if (!state.hasOT) console.warn("[v5] Falta ejecutar supabase/v5_orden_trabajo_pedidos.sql");
   if (!state.hasHistPedidos) console.warn("[v4] Falta ejecutar supabase/v4_leo_edita_historial_pedidos.sql");
   if (!state.hasObra || !state.hasOcultos) console.warn("[v3] Falta ejecutar supabase/v3_marcelo_obra_ocultos.sql");
   if (state.hasPedidos && !state.hasPedidosV2) console.warn("[pedidos] Falta ejecutar supabase/pedidos_v2.sql");
@@ -1313,6 +1317,8 @@ function abrirPedidoModal({ origen, items, proveedor = "", categoria = "" }) {
   $("#ped-proveedor").value = proveedor;
   $("#ped-obra").value = "";
   $("#ped-obra-wrap").classList.toggle("hidden", !state.hasObra);
+  $("#ped-ot").value = "";
+  $("#ped-ot-wrap").classList.toggle("hidden", !state.hasOT);
   $("#ped-urgencia").value = items.some((i) => i.stock_al_pedir === 0) ? "Urgente" : "Normal";
   $("#ped-obs").value = "";
   $("#ped-items").innerHTML = "";
@@ -1341,6 +1347,8 @@ function abrirEditarPedido(id) {
   $("#ped-proveedor").value = ped.proveedor || "";
   $("#ped-obra").value = ped.obra || "";
   $("#ped-obra-wrap").classList.toggle("hidden", !state.hasObra);
+  $("#ped-ot").value = ped.orden_trabajo || "";
+  $("#ped-ot-wrap").classList.toggle("hidden", !state.hasOT);
   $("#ped-urgencia").value = ped.urgencia || "Normal";
   $("#ped-obs").value = ped.obs || "";
   $("#ped-items").innerHTML = "";
@@ -1589,6 +1597,7 @@ $("#ped-confirm").addEventListener("click", async () => {
       urgencia: $("#ped-urgencia").value,
       obs: $("#ped-obs").value.trim(),
       ...(state.hasObra ? { obra: $("#ped-obra").value.trim() } : {}),
+      ...(state.hasOT ? { orden_trabajo: $("#ped-ot").value.trim() } : {}),
       usuario: state.currentUserLabel,
     })
     .select()
@@ -1634,6 +1643,7 @@ async function guardarEdicionPedido(items) {
     obs: $("#ped-obs").value.trim(),
   };
   if (state.hasObra) header.obra = $("#ped-obra").value.trim();
+  if (state.hasOT) header.orden_trabajo = $("#ped-ot").value.trim();
   if (state.hasPedidosV2) Object.assign(header, { editado_por: state.currentUserLabel, fecha_editado: new Date().toISOString() });
   const { error: eH } = await sb.from("pedidos").update(header).eq("id", ped.id);
   if (eH) errores.push(eH.message);
@@ -1741,12 +1751,17 @@ async function enviarMailPedido(pedidoId) {
   if (state.currentTab === "pedidos" || state.currentTab === "recibidos") renderCurrentTab();
 }
 
+// "Obra: Cocina Pérez · OT N° 123" (lo que haya cargado)
+function obraTexto(ped) {
+  return [ped.obra && `Obra: ${ped.obra}`, ped.orden_trabajo && `OT N° ${ped.orden_trabajo}`].filter(Boolean).join(" · ");
+}
+
 function textoPedido(ped) {
   const items = ped.pedido_items || [];
   return (
     `Orden de pedido #${ped.id}${ped.urgencia === "Urgente" ? " (URGENTE)" : ""}\n` +
     `Fecha: ${new Date(ped.fecha).toLocaleString("es-AR")} · Pedido por: ${ped.usuario}\n` +
-    (ped.obra ? `Obra: ${ped.obra}\n` : "") +
+    (ped.obra || ped.orden_trabajo ? `${obraTexto(ped)}\n` : "") +
     `Categoría: ${ped.categoria || "—"} · Proveedor: ${ped.proveedor || "—"}\n\n` +
     items
       .map(
@@ -1769,7 +1784,7 @@ function abrirMailto(pedidoId) {
   if (!ped) return;
   const items = ped.pedido_items || [];
   const subject =
-    `${ped.urgencia === "Urgente" ? "[URGENTE] " : ""}Pedido #${ped.id}${ped.obra ? ` (Obra ${ped.obra})` : ""} — ` +
+    `${ped.urgencia === "Urgente" ? "[URGENTE] " : ""}Pedido #${ped.id}${ped.obra || ped.orden_trabajo ? ` (${obraTexto(ped)})` : ""} — ` +
     (items.length === 1 ? `${items[0].cantidad} ${items[0].unidad} de ${items[0].descripcion}` : `${items.length} insumos`);
   window.location.href =
     `mailto:${DESTINATARIOS_PEDIDO.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(textoPedido(ped))}`;
@@ -1828,7 +1843,7 @@ function renderVistaPedidos({ vista, titulo, filtroKey, filtros }) {
           )
           .join("")}
       </div>
-      <input type="text" id="ped-search" placeholder="Buscar insumo, obra, proveedor, #…" />
+      <input type="text" id="ped-search" placeholder="Buscar insumo, obra, OT, proveedor, #…" />
       <div class="spacer"></div>
       ${vista === "abiertos" ? `<button class="btn-accent btn-inline" id="ped-nuevo">＋  Nuevo pedido manual</button>` : ""}
     </div>
@@ -1886,7 +1901,7 @@ function renderPedidoRows() {
     if (enArchivo === esAbierto(p)) return false; // abiertos en Pedidos, cerrados en Recibidos
     if (f !== "abiertos" && f !== "archivo" && p.estado !== f) return false;
     if (!q) return true;
-    const hay = [p.id, p.obra, p.proveedor, p.categoria, p.usuario, p.obs, ...(p.pedido_items || []).map((i) => `${i.descripcion} ${i.codigo} ${i.marca} ${i.color}`)]
+    const hay = [p.id, p.obra, p.orden_trabajo, p.proveedor, p.categoria, p.usuario, p.obs, ...(p.pedido_items || []).map((i) => `${i.descripcion} ${i.codigo} ${i.marca} ${i.color}`)]
       .join(" ")
       .toLowerCase();
     return hay.includes(q);
@@ -1921,7 +1936,7 @@ function renderPedidoRows() {
           <td>${p.id}${p.urgencia === "Urgente" ? ' <span class="badge badge-red">URG</span>' : ""}</td>
           <td style="white-space:nowrap">${new Date(p.fecha).toLocaleDateString("es-AR")}<br><span class="muted">${p.origen === "alerta" ? "⚠ por alerta" : "✎ manual"}</span></td>
           <td>${items}${p.obs ? `<div class="muted">📝 ${escapeHtml(p.obs)}</div>` : ""}</td>
-          <td>${p.obra ? `<b>${escapeHtml(p.obra)}</b>` : "—"}</td>
+          <td>${p.obra ? `<b>${escapeHtml(p.obra)}</b>` : p.orden_trabajo ? "" : "—"}${p.orden_trabajo ? `${p.obra ? "<br>" : ""}<span class="muted">OT N° ${escapeHtml(p.orden_trabajo)}</span>` : ""}</td>
           <td>${escapeHtml(p.categoria || "—")}</td>
           <td>${escapeHtml(p.proveedor || "—")}</td>
           <td>${escapeHtml(p.usuario || "—")}</td>
@@ -2124,14 +2139,15 @@ function pdfPedido(id) {
   doc.setTextColor(60);
   doc.text(`Grupo Aixa  ·  ${new Date(ped.fecha).toLocaleString("es-AR")}  ·  Pedido por: ${ped.usuario}`, 40, 64);
   doc.text(`Categoría: ${ped.categoria || "—"}     Proveedor: ${ped.proveedor || "—"}     Estado: ${ped.estado}`, 40, 80);
-  if (ped.obra) {
+  const conObra = ped.obra || ped.orden_trabajo;
+  if (conObra) {
     doc.setFontSize(12);
     doc.setTextColor(30);
-    doc.text(`Obra: ${ped.obra}`, 40, 98);
+    doc.text(obraTexto(ped), 40, 98);
   }
 
   doc.autoTable({
-    startY: ped.obra ? 112 : 96,
+    startY: conObra ? 112 : 96,
     head: [["Insumo", "Código", "Marca", "Color", "Medida", "Cantidad", ...(hayRecibido ? ["Recibido"] : [])]],
     body: (ped.pedido_items || []).map((i) => [
       i.descripcion,

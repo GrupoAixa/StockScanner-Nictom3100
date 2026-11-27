@@ -40,8 +40,9 @@ function armarMail(ped: any) {
   const items: any[] = ped.pedido_items || [];
   const fecha = new Date(ped.fecha).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" });
   const urgente = ped.urgencia === "Urgente";
+  const obraTxt = [ped.obra && `Obra: ${ped.obra}`, ped.orden_trabajo && `OT N° ${ped.orden_trabajo}`].filter(Boolean).join(" · ");
   const subject =
-    `${urgente ? "[URGENTE] " : ""}Pedido #${ped.id}${ped.obra ? ` (Obra ${ped.obra})` : ""} — ` +
+    `${urgente ? "[URGENTE] " : ""}Pedido #${ped.id}${obraTxt ? ` (${obraTxt})` : ""} — ` +
     (items.length === 1 ? `${items[0].cantidad} ${items[0].unidad} de ${items[0].descripcion}` : `${items.length} insumos`);
 
   const filas = items
@@ -60,7 +61,7 @@ function armarMail(ped: any) {
   const html = `<div style="font-family:Segoe UI,Arial,sans-serif;color:#222">
     <h2 style="margin:0 0 4px;color:#ea580c">${urgente ? "🔴 URGENTE — " : ""}Orden de pedido #${ped.id}</h2>
     <p style="margin:0 0 12px;color:#555">${ped.origen === "alerta" ? "Generada desde la alerta de stock mínimo" : "Pedido manual"} · ${esc(fecha)} · por <b>${esc(ped.usuario)}</b></p>
-    ${ped.obra ? `<p style="margin:0 0 6px;font-size:16px"><b>Obra:</b> ${esc(ped.obra)}</p>` : ""}
+    ${ped.obra || ped.orden_trabajo ? `<p style="margin:0 0 6px;font-size:16px">${ped.obra ? `<b>Obra:</b> ${esc(ped.obra)}` : ""}${ped.obra && ped.orden_trabajo ? " &nbsp; " : ""}${ped.orden_trabajo ? `<b>OT N°:</b> ${esc(ped.orden_trabajo)}` : ""}</p>` : ""}
     <p style="margin:0 0 4px"><b>Categoría:</b> ${esc(ped.categoria) || "—"} &nbsp; <b>Proveedor:</b> ${esc(ped.proveedor) || "—"}</p>
     <table style="border-collapse:collapse;margin-top:10px;font-size:14px">
       <thead><tr style="background:#f97316;color:#fff">
@@ -77,7 +78,7 @@ function armarMail(ped: any) {
   const text =
     `Orden de pedido #${ped.id}${urgente ? " (URGENTE)" : ""}\n` +
     `Fecha: ${fecha} · Pedido por: ${ped.usuario}\n` +
-    (ped.obra ? `Obra: ${ped.obra}\n` : "") +
+    (obraTxt ? `${obraTxt}\n` : "") +
     `Categoría: ${ped.categoria || "—"} · Proveedor: ${ped.proveedor || "—"}\n\n` +
     items
       .map(
